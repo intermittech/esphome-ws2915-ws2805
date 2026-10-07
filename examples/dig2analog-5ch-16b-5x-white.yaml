@@ -1,0 +1,106 @@
+# dig2analog-5ch-16b (WS2915, 16-bit) as five independent single-colour lights (CH1..CH5).
+# ESP32 classic, ESP-IDF.
+
+substitutions:
+  name: d2a-5ch-16b-white
+  friendly_name: dig2analog 5ch 16b white
+  data_pin: GPIO16
+  boards: "1"
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+external_components:
+  - source: github://intermittech/esphome-ws2915-ws2805@main
+    components: [ws2915]
+    # Developing the component itself? Use the local copy instead:
+    # source:
+    #   type: local
+    #   path: ../components
+
+logger:
+api:
+ota:
+  - platform: esphome
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap: {}
+captive_portal:
+
+ws2915:
+  id: d2a
+  chip_type: ws2915
+  pin: ${data_pin}
+  num_chips: ${boards}
+  gain: 31                        # MOSFET stage: full gain (see the RGBCCT example)
+  refresh_interval: 1s
+  transition_refresh_rate: 200Hz
+  power_limit:
+    channel_current: 3A           # one value for all five channels (per board, at 100 %)
+    max_chip_current: 5A          # per board, below F1
+
+output:
+  - platform: ws2915
+    id: out_ch1
+    channel: ch1
+  - platform: ws2915
+    id: out_ch2
+    channel: ch2
+  - platform: ws2915
+    id: out_ch3
+    channel: ch3
+  - platform: ws2915
+    id: out_ch4
+    channel: ch4
+  - platform: ws2915
+    id: out_ch5
+    channel: ch5
+
+light:
+  - platform: monochromatic
+    name: White 1
+    output: out_ch1
+    gamma_correct: 2.8
+    default_transition_length: 1s
+    restore_mode: RESTORE_DEFAULT_OFF
+  - platform: monochromatic
+    name: White 2
+    output: out_ch2
+    gamma_correct: 2.8
+    default_transition_length: 1s
+    restore_mode: RESTORE_DEFAULT_OFF
+  - platform: monochromatic
+    name: White 3
+    output: out_ch3
+    gamma_correct: 2.8
+    default_transition_length: 1s
+    restore_mode: RESTORE_DEFAULT_OFF
+  - platform: monochromatic
+    name: White 4
+    output: out_ch4
+    gamma_correct: 2.8
+    default_transition_length: 1s
+    restore_mode: RESTORE_DEFAULT_OFF
+  - platform: monochromatic
+    name: White 5
+    output: out_ch5
+    gamma_correct: 2.8
+    default_transition_length: 1s
+    restore_mode: RESTORE_DEFAULT_OFF
+
+sensor:
+  - platform: template
+    name: LED current (estimated)
+    unit_of_measurement: A
+    device_class: current
+    state_class: measurement
+    accuracy_decimals: 2
+    update_interval: 5s
+    lambda: return id(d2a).get_current();

@@ -1,0 +1,8 @@
+.venv/
+.esphome/
+__pycache__/
+*.pyc
+tests/build/
+secrets.yaml
+tests/build-compile-*.log
+tests/build-compile-summary.txt

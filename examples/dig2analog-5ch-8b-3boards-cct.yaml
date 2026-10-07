@@ -1,0 +1,126 @@
+# dig2analog-5ch-8b (WS2805, 8-bit) as two CCT lights + one single-colour light.
+#   CH1/CH2 = CCT A (cold/warm), CH3/CH4 = CCT B (cold/warm), CH5 = single white
+# Shows cwww with constant_brightness and three boards on one line.
+
+substitutions:
+  name: d2a-5ch-8b-cct
+  friendly_name: dig2analog 5ch 8b CCT
+  data_pin: GPIO16
+  boards: "3"
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+external_components:
+  - source: github://intermittech/esphome-ws2915-ws2805@main
+    components: [ws2915]
+    # Developing the component itself? Use the local copy instead:
+    # source:
+    #   type: local
+    #   path: ../components
+
+logger:
+api:
+ota:
+  - platform: esphome
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap: {}
+captive_portal:
+
+ws2915:
+  id: d2a
+  chip_type: ws2805
+  pin: ${data_pin}
+  num_chips: ${boards}
+  refresh_interval: 1s
+  power_limit:
+    channel_current: 2A           # per channel, per board, at 100 %
+    max_chip_current: 5A          # per board, below F1
+    max_power: 240W               # whole line: the power supply
+    supply_voltage: 24V
+
+output:
+  # Board 1 (chip 0, first on the line)
+  - { platform: ws2915, id: b1_ch1, chip: 0, channel: 1 }
+  - { platform: ws2915, id: b1_ch2, chip: 0, channel: 2 }
+  - { platform: ws2915, id: b1_ch3, chip: 0, channel: 3 }
+  - { platform: ws2915, id: b1_ch4, chip: 0, channel: 4 }
+  - { platform: ws2915, id: b1_ch5, chip: 0, channel: 5 }
+  # Board 2
+  - { platform: ws2915, id: b2_ch1, chip: 1, channel: 1 }
+  - { platform: ws2915, id: b2_ch2, chip: 1, channel: 2 }
+  - { platform: ws2915, id: b2_ch3, chip: 1, channel: 3 }
+  - { platform: ws2915, id: b2_ch4, chip: 1, channel: 4 }
+  - { platform: ws2915, id: b2_ch5, chip: 1, channel: 5 }
+  # Board 3
+  - { platform: ws2915, id: b3_ch1, chip: 2, channel: 1 }
+  - { platform: ws2915, id: b3_ch2, chip: 2, channel: 2 }
+  - { platform: ws2915, id: b3_ch3, chip: 2, channel: 3 }
+  - { platform: ws2915, id: b3_ch4, chip: 2, channel: 4 }
+  - { platform: ws2915, id: b3_ch5, chip: 2, channel: 5 }
+
+light:
+  - platform: cwww
+    name: Board 1 CCT A
+    cold_white: b1_ch1
+    warm_white: b1_ch2
+    cold_white_color_temperature: 6500 K
+    warm_white_color_temperature: 2700 K
+    constant_brightness: true
+    default_transition_length: 1s
+  - platform: cwww
+    name: Board 1 CCT B
+    cold_white: b1_ch3
+    warm_white: b1_ch4
+    cold_white_color_temperature: 6500 K
+    warm_white_color_temperature: 2700 K
+    constant_brightness: true
+    default_transition_length: 1s
+  - platform: monochromatic
+    name: Board 1 White
+    output: b1_ch5
+    default_transition_length: 1s
+
+  - platform: cwww
+    name: Board 2 CCT A
+    cold_white: b2_ch1
+    warm_white: b2_ch2
+    cold_white_color_temperature: 6500 K
+    warm_white_color_temperature: 2700 K
+    constant_brightness: true
+  - platform: cwww
+    name: Board 2 CCT B
+    cold_white: b2_ch3
+    warm_white: b2_ch4
+    cold_white_color_temperature: 6500 K
+    warm_white_color_temperature: 2700 K
+    constant_brightness: true
+  - platform: monochromatic
+    name: Board 2 White
+    output: b2_ch5
+
+  - platform: cwww
+    name: Board 3 CCT A
+    cold_white: b3_ch1
+    warm_white: b3_ch2
+    cold_white_color_temperature: 6500 K
+    warm_white_color_temperature: 2700 K
+    constant_brightness: true
+  - platform: cwww
+    name: Board 3 CCT B
+    cold_white: b3_ch3
+    warm_white: b3_ch4
+    cold_white_color_temperature: 6500 K
+    warm_white_color_temperature: 2700 K
+    constant_brightness: true
+  - platform: monochromatic
+    name: Board 3 White
+    output: b3_ch5

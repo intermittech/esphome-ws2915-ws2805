@@ -1,0 +1,123 @@
+# dig2analog-5ch-16b (WS2915, 16-bit) as one RGBCCT light.
+#   CH1 R, CH2 G, CH3 B, CH4 (W1) cold white, CH5 (W2) warm white
+# ESP32 classic, ESP-IDF. Everything under `light:` is stock ESPHome (gamma, colour
+# temperature in K or mireds, colour interlock, transitions, effects).
+
+substitutions:
+  name: d2a-5ch-16b
+  friendly_name: dig2analog 5ch 16b
+  data_pin: GPIO16   # controller output wired to the board's Data-In
+  boards: "1"        # dig2analog-5ch boards on this line (Data-Out -> Data-In)
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+external_components:
+  - source: github://intermittech/esphome-ws2915-ws2805@main
+    components: [ws2915]
+    # Developing the component itself? Use the local copy instead:
+    # source:
+    #   type: local
+    #   path: ../components
+
+logger:
+api:
+ota:
+  - platform: esphome
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap: {}
+captive_portal:
+
+ws2915:
+  id: d2a
+  chip_type: ws2915
+  pin: ${data_pin}
+  num_chips: ${boards}
+  # The gain sets the WS2915's sink current, not the LED current. On this board each output
+  # only pulls a 3.3k pull-up (~1.6 mA) low to switch its MOSFET, so use full gain.
+  gain: 31
+  refresh_interval: 1s            # at rest: re-send the unchanged frame every second
+  transition_refresh_rate: 200Hz  # while fading / running effects (default: ~60 fps)
+  power_limit:
+    channel_current:              # LED current per channel at 100 %: set to your strip
+      red: 3A
+      green: 3A
+      blue: 3A
+      white1: 5A
+      white2: 5A
+    max_chip_current: 5A          # per board: ~80 % of F1 (6.3 A); 6 A with a 7.5 A fuse
+    # Whole line (power supply), use instead of / next to max_chip_current:
+    # max_power: 150W
+    # supply_voltage: 24V
+
+output:
+  - platform: ws2915
+    id: out_red
+    channel: 1
+  - platform: ws2915
+    id: out_green
+    channel: 2
+  - platform: ws2915
+    id: out_blue
+    channel: 3
+  - platform: ws2915
+    id: out_cold
+    channel: 4
+  - platform: ws2915
+    id: out_warm
+    channel: 5
+    # Stock output options work as on ledc, e.g. a floor for the lowest dim level:
+    # min_power: 0.001
+    # zero_means_zero: true
+
+light:
+  - platform: rgbww
+    id: rgbcct
+    name: RGBCCT
+    red: out_red
+    green: out_green
+    blue: out_blue
+    cold_white: out_cold
+    warm_white: out_warm
+    cold_white_color_temperature: 6500 K  # or 153 mireds
+    warm_white_color_temperature: 2700 K  # or 370 mireds
+    # RGB and white are never on together; Home Assistant shows separate RGB and colour
+    # temperature modes.
+    color_interlock: true
+    # true: cold + warm stay at constant total power across colour temperatures.
+    constant_brightness: false
+    gamma_correct: 2.8               # applied before the 16-bit output (256-point table, interpolated)
+    default_transition_length: 1s
+    restore_mode: RESTORE_DEFAULT_OFF
+    effects:
+      - pulse:
+      - pulse:
+          name: Slow Pulse
+          transition_length: 2s
+          update_interval: 2s
+      - strobe:
+      - flicker:
+
+sensor:
+  - platform: template
+    name: LED current (estimated)
+    unit_of_measurement: A
+    device_class: current
+    state_class: measurement
+    accuracy_decimals: 2
+    update_interval: 5s
+    lambda: return id(d2a).get_current();
+
+binary_sensor:
+  - platform: template
+    name: Power limit active
+    entity_category: diagnostic
+    lambda: return id(d2a).is_limiting();

@@ -1,0 +1,139 @@
+# Bench firmware for the first dig2analog-5ch-16b boards: raw 16-bit levels, gain and header
+# format adjustable from Home Assistant / the web server, no light in between.
+# Use it to verify the open WS2915 points (README "Bench plan"):
+#   - header format: 32-bit (V1.3/V1.5) vs 26-bit (V1.1)
+#   - PWM scheme at low codes (scope on a MOSFET gate) and the lowest code that lights
+#   - re-latch with refresh_interval: no visible flicker
+
+substitutions:
+  name: d2a-5ch-16b-bench
+  friendly_name: dig2analog 5ch 16b bench
+  data_pin: GPIO16
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+external_components:
+  - source: github://intermittech/esphome-ws2915-ws2805@main
+    components: [ws2915]
+    # Developing the component itself? Use the local copy instead:
+    # source:
+    #   type: local
+    #   path: ../components
+
+logger:
+api:
+ota:
+  - platform: esphome
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap: {}
+captive_portal:
+web_server:
+  port: 80
+
+ws2915:
+  id: d2a
+  chip_type: ws2915
+  pin: ${data_pin}
+  num_chips: 1
+  gain: 31
+  header_format: 32bit
+  refresh_interval: 1s
+
+select:
+  - platform: template
+    name: Header format
+    options: ["32bit", "26bit"]
+    initial_option: "32bit"
+    optimistic: true
+    set_action:
+      - lambda: |-
+          id(d2a).set_header_format(x == "26bit" ? ws2915::HEADER_26BIT : ws2915::HEADER_32BIT);
+
+number:
+  - platform: template
+    name: Gain (all channels)
+    min_value: 0
+    max_value: 31
+    step: 1
+    initial_value: 31
+    optimistic: true
+    set_action:
+      - lambda: |-
+          for (uint8_t ch = 0; ch < 5; ch++) id(d2a).set_gain(ch, (uint8_t) x);
+  - platform: template
+    name: Raw CH1 (R)
+    min_value: 0
+    max_value: 65535
+    step: 1
+    initial_value: 0
+    mode: box
+    optimistic: true
+    set_action:
+      - lambda: id(d2a).set_raw(0, 0, (uint16_t) x);
+  - platform: template
+    name: Raw CH2 (G)
+    min_value: 0
+    max_value: 65535
+    step: 1
+    initial_value: 0
+    mode: box
+    optimistic: true
+    set_action:
+      - lambda: id(d2a).set_raw(0, 1, (uint16_t) x);
+  - platform: template
+    name: Raw CH3 (B)
+    min_value: 0
+    max_value: 65535
+    step: 1
+    initial_value: 0
+    mode: box
+    optimistic: true
+    set_action:
+      - lambda: id(d2a).set_raw(0, 2, (uint16_t) x);
+  - platform: template
+    name: Raw CH4 (W1)
+    min_value: 0
+    max_value: 65535
+    step: 1
+    initial_value: 0
+    mode: box
+    optimistic: true
+    set_action:
+      - lambda: id(d2a).set_raw(0, 3, (uint16_t) x);
+  - platform: template
+    name: Raw CH5 (W2)
+    min_value: 0
+    max_value: 65535
+    step: 1
+    initial_value: 0
+    mode: box
+    optimistic: true
+    set_action:
+      - lambda: id(d2a).set_raw(0, 4, (uint16_t) x);
+
+button:
+  - platform: template
+    name: All channels 1 LSB
+    on_press:
+      - lambda: for (uint8_t ch = 0; ch < 5; ch++) id(d2a).set_raw(0, ch, 0x0001);
+  - platform: template
+    name: All channels 256 LSB
+    on_press:
+      - lambda: for (uint8_t ch = 0; ch < 5; ch++) id(d2a).set_raw(0, ch, 0x0100);
+  - platform: template
+    name: All channels 50 %
+    on_press:
+      - lambda: for (uint8_t ch = 0; ch < 5; ch++) id(d2a).set_raw(0, ch, 0x8000);
+  - platform: template
+    name: All channels off
+    on_press:
+      - lambda: for (uint8_t ch = 0; ch < 5; ch++) id(d2a).set_raw(0, ch, 0);
