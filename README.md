@@ -24,7 +24,7 @@ external_components:
 ```
 
 - **Pin a version:** replace `@main` with a tag or commit hash.
-- **Get the latest:** ESPHome re-downloads at most once a day. Add `refresh: 0s` next to `components:` to always fetch the latest.
+- **Get the latest:** ESPHome re-downloads at most once a day. Add `refresh: always` next to `components:` to always fetch the latest.
 
 ## Minimal config
 
