@@ -10,23 +10,28 @@ import re
 
 from esphome import pins
 import esphome.codegen as cg
-from esphome.components import esp32, esp32_rmt
+from esphome.components import esp32, esp32_rmt, power_supply
 from esphome.components.esp32 import include_builtin_idf_component
 import esphome.config_validation as cv
+import esphome.final_validate as fv
 from esphome.const import (
     CONF_BLUE,
+    CONF_ENABLE_TIME,
     CONF_GREEN,
     CONF_ID,
     CONF_INVERTED,
+    CONF_KEEP_ON_TIME,
     CONF_MAX_CURRENT,
     CONF_MAX_POWER,
     CONF_NUM_CHIPS,
     CONF_NUMBER,
     CONF_PIN,
+    CONF_POWER_SUPPLY,
     CONF_RED,
     CONF_RMT_SYMBOLS,
     CONF_USE_DMA,
 )
+from esphome.core import CORE
 from esphome.types import ConfigType
 
 _LOGGER = logging.getLogger(__name__)
@@ -70,6 +75,7 @@ CONF_CHANNEL_CURRENT = "channel_current"
 CONF_MAX_CHIP_CURRENT = "max_chip_current"
 CONF_MAX_CHANNEL_CURRENT = "max_channel_current"
 CONF_SUPPLY_VOLTAGE = "supply_voltage"
+CONF_POWER_ON_DELAY = "power_on_delay"
 
 # Order = header/data order in the datasheets (R, G, B, W1, W2) = C++ channel index.
 CHANNEL_KEYS = [CONF_RED, CONF_GREEN, CONF_BLUE, CONF_WHITE1, CONF_WHITE2]
@@ -393,6 +399,16 @@ CONFIG_SCHEMA = cv.All(
             # the main loop keeps the loop in high-frequency mode until the light settles.
             cv.Optional(CONF_TRANSITION_REFRESH_RATE): _validate_transition_rate,
             cv.Optional(CONF_POWER_LIMIT): _validate_power_limit,
+            # Request this supply while any channel on the line is above 0 (instead of
+            # power_supply: on each output). Give the supply enable_time: 0ms and use
+            # power_on_delay, which waits without blocking the main loop.
+            cv.Optional(CONF_POWER_SUPPLY): cv.use_id(power_supply.PowerSupply),
+            # Time the boards need after power-on before they take data: after boot, and
+            # after power_supply switches on. Frames are held meanwhile (non-blocking).
+            cv.Optional(CONF_POWER_ON_DELAY): cv.All(
+                cv.positive_time_period_milliseconds,
+                cv.Range(max=cv.TimePeriod(seconds=30)),
+            ),
             cv.SplitDefault(
                 CONF_RMT_SYMBOLS,
                 esp32=192,
@@ -416,6 +432,35 @@ CONFIG_SCHEMA = cv.All(
     _warn_timing,
     _warn_frame_rate,
 )
+
+
+def _power_supply_config(full_config, psu_id):
+    for conf in full_config.get("power_supply", []) or []:
+        if conf[CONF_ID] == psu_id:
+            return conf
+    return None
+
+
+def _final_validate(configs):
+    full = fv.full_config.get()
+    for conf in configs if isinstance(configs, list) else [configs]:
+        if CONF_POWER_SUPPLY not in conf:
+            continue
+        psu = _power_supply_config(full, conf[CONF_POWER_SUPPLY])
+        if psu is None:
+            continue
+        enable_ms = psu[CONF_ENABLE_TIME].total_milliseconds
+        if enable_ms > 50:
+            _LOGGER.warning(
+                "ws2915: power_supply '%s' has enable_time %d ms, which blocks the main loop "
+                "on every switch-on; set enable_time: 0ms and use power_on_delay on ws2915",
+                conf[CONF_POWER_SUPPLY],
+                enable_ms,
+            )
+    return configs
+
+
+FINAL_VALIDATE_SCHEMA = _final_validate
 
 
 async def to_code(config: ConfigType) -> None:
@@ -457,6 +502,14 @@ async def to_code(config: ConfigType) -> None:
         cg.add(
             var.set_transition_refresh_interval(config[CONF_TRANSITION_REFRESH_RATE])
         )
+
+    if CONF_POWER_ON_DELAY in config:
+        cg.add(var.set_power_on_delay(config[CONF_POWER_ON_DELAY].total_milliseconds))
+    if CONF_POWER_SUPPLY in config:
+        psu = await cg.get_variable(config[CONF_POWER_SUPPLY])
+        psu_conf = _power_supply_config(CORE.config, config[CONF_POWER_SUPPLY])
+        keep_on = psu_conf[CONF_KEEP_ON_TIME].total_milliseconds if psu_conf else 0
+        cg.add(var.set_power_supply(psu, keep_on))
 
     if CONF_POWER_LIMIT in config:
         plim = config[CONF_POWER_LIMIT]

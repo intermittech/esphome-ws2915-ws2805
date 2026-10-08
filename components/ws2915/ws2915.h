@@ -8,6 +8,10 @@
 
 #include "ws2915_frame.h"
 
+#ifdef USE_POWER_SUPPLY
+#include "esphome/components/power_supply/power_supply.h"
+#endif
+
 #include <driver/rmt_encoder.h>
 #include <driver/rmt_tx.h>
 
@@ -74,6 +78,18 @@ class WS2915Component final : public Component {
   }
   void set_max_chip_current(float amps) { this->power_.max_chip_current = amps; }
   void set_max_current(float amps) { this->power_.max_current = amps; }
+  /// Time the chips need after power-on before they take data. Frames are held (without
+  /// blocking) for this long after boot and after the power supply switches on.
+  void set_power_on_delay(uint32_t ms) { this->power_on_delay_ms_ = ms; }
+#ifdef USE_POWER_SUPPLY
+  /// Request `psu` while any channel on this line is above 0. keep_on_time_ms is the
+  /// supply's keep_on_time, so a re-request inside it is known to need no power-on delay.
+  void set_power_supply(power_supply::PowerSupply *psu, uint32_t keep_on_time_ms) {
+    this->psu_ = psu;
+    this->psu_req_.set_parent(psu);
+    this->psu_keep_on_ms_ = keep_on_time_ms;
+  }
+#endif
 
   // Runtime API (lambdas / bench). Gain and header format are chain-wide.
   void set_gain(uint8_t channel, uint8_t gain);
@@ -90,6 +106,8 @@ class WS2915Component final : public Component {
   /// Current the lights ask for before limiting, in A (needs power_limit).
   float get_requested_current() const { return this->requested_current_; }
   bool is_limiting() const { return this->limiting_; }
+  /// False while frames are held for power_on_delay.
+  bool is_power_ready() const { return !this->power_waiting_; }
   uint16_t get_num_chips() const { return this->num_chips_; }
 
  protected:
@@ -102,6 +120,8 @@ class WS2915Component final : public Component {
   void mark_changed_();
   void request_frame_();
   void transmit_();
+  void update_power_();
+  void start_power_wait_(uint32_t ms);
 
   ChipType chip_type_{CHIP_WS2915};
   HeaderFormat header_format_{HEADER_32BIT};
@@ -131,6 +151,18 @@ class WS2915Component final : public Component {
   float current_{0.0f};
   float requested_current_{0.0f};
   bool limiting_{false};
+
+  uint32_t power_on_delay_ms_{0};
+  bool power_waiting_{false};
+  size_t nonzero_{0};  // channels above 0 on the whole line
+#ifdef USE_POWER_SUPPLY
+  power_supply::PowerSupply *psu_{nullptr};
+  power_supply::PowerSupplyRequester psu_req_;
+  bool psu_requested_{false};
+  bool psu_released_{false};
+  uint32_t psu_released_ms_{0};
+  uint32_t psu_keep_on_ms_{0};
+#endif
 
   uint16_t *levels_{nullptr};  // targets, chip-major, before power limiting
   uint8_t *tx_buf_{nullptr};   // wire bytes of the frame on the line

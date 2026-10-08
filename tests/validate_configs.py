@@ -35,6 +35,13 @@ ws2915:
   gain: 31
 """
 
+PSU = """\
+power_supply:
+  - id: psu
+    pin: GPIO12
+    enable_time: {enable}
+"""
+
 OUT = """\
 output:
   - platform: ws2915
@@ -178,6 +185,21 @@ CASES = [
         "not both",
     ),
     ("use_dma on esp32", HUB16 + "  use_dma: true\n", False, None),
+    ("power_on_delay alone", HUB16 + "  power_on_delay: 1.5s\n", True, None),
+    ("power_on_delay 60s", HUB16 + "  power_on_delay: 60s\n", False, None),
+    (
+        "hub power_supply non-blocking",
+        PSU.format(enable="0ms") + HUB16 + "  power_supply: psu\n  power_on_delay: 1.5s\n",
+        True,
+        "!blocks the main loop",
+    ),
+    (
+        "hub power_supply blocking enable_time",
+        PSU.format(enable="1500ms") + HUB16 + "  power_supply: psu\n",
+        True,
+        "enable_time 1500 ms, which blocks the main loop",
+    ),
+    ("hub power_supply unknown id", HUB16 + "  power_supply: nope\n", False, "nope"),
 ]
 
 

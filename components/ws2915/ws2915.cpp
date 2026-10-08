@@ -88,13 +88,61 @@ void WS2915Component::set_value_(uint16_t chip, uint8_t channel, uint16_t value)
   uint16_t &level = this->levels_[static_cast<size_t>(chip) * CHANNELS_PER_CHIP + channel];
   if (level == value)
     return;
+  const bool was_on = level != 0;
   level = value;
+  if (was_on != (value != 0)) {
+    if (value != 0) {
+      this->nonzero_++;
+    } else {
+      this->nonzero_--;
+    }
+    this->update_power_();
+  }
   this->mark_changed_();
+}
+
+// Hold the power supply while any channel is above 0. After a real switch-on, frames are
+// held for power_on_delay so the boards have power before the first frame arrives.
+void WS2915Component::update_power_() {
+#ifdef USE_POWER_SUPPLY
+  if (this->psu_ == nullptr)
+    return;
+  if (this->nonzero_ > 0 && !this->psu_requested_) {
+    // Still on if something else holds it, or we released it less than keep_on_time ago
+    // (is_enabled() only counts active requests, not the keep-on period).
+    const bool on = this->psu_->is_enabled() ||
+                    (this->psu_released_ && millis() - this->psu_released_ms_ < this->psu_keep_on_ms_);
+    this->psu_req_.request();
+    this->psu_requested_ = true;
+    if (!on)
+      this->start_power_wait_(this->power_on_delay_ms_);
+  } else if (this->nonzero_ == 0 && this->psu_requested_) {
+    this->psu_req_.unrequest();
+    this->psu_requested_ = false;
+    this->psu_released_ = true;
+    this->psu_released_ms_ = millis();
+  }
+#endif
+}
+
+void WS2915Component::start_power_wait_(uint32_t ms) {
+  if (ms == 0)
+    return;
+  if (this->high_freq_active_) {
+    this->high_freq_.stop();
+    this->high_freq_active_ = false;
+  }
+  this->power_waiting_ = true;
+  this->set_timeout("power-on", ms, [this]() {
+    this->power_waiting_ = false;
+    this->dirty_ = true;
+    this->enable_loop();
+  });
 }
 
 // A value changed: send a frame, and keep the main loop fast while changes keep coming.
 void WS2915Component::mark_changed_() {
-  if (this->use_high_freq_) {
+  if (this->use_high_freq_ && !this->power_waiting_) {
     this->last_change_ms_ = millis();
     if (!this->high_freq_active_) {
       this->high_freq_.start();
@@ -183,6 +231,20 @@ void WS2915Component::setup() {
   // Line is idle low now; guarantee one full reset period before the first frame.
   delayMicroseconds(this->reset_ns_ / 1000 + 1);
   this->dirty_ = true;
+
+  // Boards powered together with the ESP (millis() ~ time since power-on), or by a supply
+  // that enable_on_boot just switched on, need power_on_delay before the first frame.
+#ifdef USE_POWER_SUPPLY
+  if (this->psu_ != nullptr) {
+    if (this->psu_->is_enabled())
+      this->start_power_wait_(this->power_on_delay_ms_);
+  } else
+#endif
+  {
+    const uint32_t now = millis();
+    if (now < this->power_on_delay_ms_)
+      this->start_power_wait_(this->power_on_delay_ms_ - now);
+  }
 }
 
 void WS2915Component::loop() {
@@ -193,6 +255,11 @@ void WS2915Component::loop() {
   if (!this->dirty_) {
     if (!this->high_freq_active_)
       this->disable_loop();
+    return;
+  }
+  // Boards still powering up: frames would be lost. The power-on timeout re-enables the loop.
+  if (this->power_waiting_) {
+    this->disable_loop();
     return;
   }
   // Rate limit; a change inside the window is sent when it expires, not dropped.
@@ -274,6 +341,13 @@ void WS2915Component::dump_config() {
   } else {
     ESP_LOGCONFIG(TAG, "  Refresh at rest: never");
   }
+  if (this->power_on_delay_ms_ != 0)
+    ESP_LOGCONFIG(TAG, "  Power-on delay: %" PRIu32 " ms (non-blocking)", this->power_on_delay_ms_);
+#ifdef USE_POWER_SUPPLY
+  if (this->psu_ != nullptr)
+    ESP_LOGCONFIG(TAG, "  Power supply: requested while any channel > 0 (keep-on %" PRIu32 " ms)",
+                  this->psu_keep_on_ms_);
+#endif
   if (this->has_power_model_) {
     const float *c = this->power_.channel_current;
     const float *m = this->power_.max_channel_current;

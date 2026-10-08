@@ -70,7 +70,7 @@ light:
 | Refresh at rest | `ws2915` | `refresh_interval` |
 | Refresh during transitions/effects | `ws2915` | `transition_refresh_rate` |
 | Lowest / highest level | output | `min_power`, `max_power`, `zero_means_zero` (stock) |
-| Switch a PSU on/off | output | `power_supply` (stock) |
+| Switch a PSU on/off | `ws2915` | `power_supply` + `power_on_delay` (non-blocking, see below) |
 | Power / current limit | `ws2915` | `power_limit` |
 
 ## `ws2915:` options
@@ -86,6 +86,8 @@ light:
 | `refresh_interval` | `never` | At rest: re-send the unchanged frame this often (≥ 20 ms). This recovers from a frame corrupted by ESD/EMI. |
 | `transition_refresh_rate` | one frame per main loop (16 ms, ~60 fps) | While values change: `200Hz`, `200fps` or a frame interval like `5ms` (1–1000 Hz). Faster than the main loop switches ESPHome's main loop to high-frequency mode while values change, plus 250 ms. |
 | `power_limit` | – | see below |
+| `power_supply` | – | id of a `power_supply:`. It is requested while any channel on this line is above 0. |
+| `power_on_delay` | 0 | Time the boards need after power-on before they take data (≤ 30 s). It applies after boot, and after `power_supply` really switches on. Frames are held without blocking. |
 | `bit0_high` / `bit0_low` | 340 / 960 ns | Valid for both chips; out-of-datasheet values give a warning. |
 | `bit1_high` / `bit1_low` | 700 / 650 ns | WS2915 T1H 520–1000 ns, WS2805 580–1000 ns |
 | `reset_time` | 300 µs | > 280 µs, ≤ 800 µs |
@@ -153,6 +155,32 @@ You describe what is connected, then add any of three caps. All settings apply t
   - `id(d2a).get_requested_current()`: current the lights ask for, in A.
   - `id(d2a).is_limiting()`
 
+### Power supply and power-on delay
+
+ESPHome's own `power_supply` waits for `enable_time` with a blocking `delay()`. For boards that need seconds
+after switch-on, let the `ws2915:` block request the supply and do the waiting instead:
+
+```yaml
+power_supply:
+  - id: led_psu
+    pin: GPIO13            # avoid GPIO12 on ESP32 (boot strapping pin)
+    enable_time: 0ms       # ws2915 waits instead, without blocking
+    keep_on_time: 60s      # switching back on within this time needs no delay
+
+ws2915:
+  power_supply: led_psu    # instead of power_supply: on every output
+  power_on_delay: 1.5s
+```
+
+1. **Switch-on:** the first channel above 0 requests the supply. The driver holds frames for `power_on_delay` while the main loop keeps running, then sends the current state.
+2. **Switch-off:** when every channel is back at 0, the driver releases the supply, which switches off after `keep_on_time`.
+3. **No delay when already on:** a switch-on within `keep_on_time`, or while something else holds the supply, isn't delayed.
+4. **Without `power_supply`:** `power_on_delay` only applies after boot, measured from power-on, for boards powered together with the ESP.
+5. **Warning:** `esphome config` warns when the linked supply still has an `enable_time` above 50 ms.
+
+- **Fades during the delay:** the boards are dark while they power up, so a fade-in shorter than the delay looks like a jump. A longer `keep_on_time` makes the delay rare.
+- **Status:** `id(d2a).is_power_ready()` is false while frames are held.
+
 ### Runtime API (lambdas)
 
 | Call | |
@@ -161,7 +189,7 @@ You describe what is connected, then add any of three caps. All settings apply t
 | `set_header_format(ws2915::HEADER_32BIT / HEADER_26BIT)` | for bench tests |
 | `set_raw(chip, ch, value)` | raw level (0–65535 / 0–255), bypasses the light until its next update |
 | `refresh()` | re-send now |
-| `get_current()`, `get_requested_current()`, `is_limiting()`, `get_num_chips()` | |
+| `get_current()`, `get_requested_current()`, `is_limiting()`, `is_power_ready()`, `get_num_chips()` | |
 
 ## Frame time
 
@@ -205,7 +233,7 @@ Datasheet V1.1 and V1.5 disagree, and nothing here has been seen on real hardwar
 
 ```bash
 .venv/Scripts/python tests/run_host_test.py      # frame/encoder/limiter, zig C++ (pip install ziglang)
-.venv/Scripts/python tests/validate_configs.py   # 38 schema cases via `esphome config`
+.venv/Scripts/python tests/validate_configs.py   # 43 schema cases via `esphome config`
 .venv/Scripts/esphome compile examples/dig2analog-5ch-16b-rgbcct.yaml
 ```
 
