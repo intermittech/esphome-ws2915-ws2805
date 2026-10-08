@@ -109,7 +109,45 @@ CASES = [
         "power limit without cap",
         HUB16 + "  power_limit:\n    channel_current: 3A\n",
         False,
-        "needs max_chip_current",
+        "needs at least one of",
+    ),
+    (
+        "channel caps: default + overrides",
+        HUB16
+        + "  power_limit:\n    channel_current: {default: 2A, ch4: 4A, ch5: 4A}\n"
+        "    max_channel_current: {default: 3A, ch4: 5A, ch5: 5A}\n",
+        True,
+        "!capped at",
+    ),
+    (
+        "channel cap single value",
+        HUB16 + "  power_limit:\n    channel_current: 2A\n    max_channel_current: 3A\n",
+        True,
+        None,
+    ),
+    (
+        "channel cap on some channels only",
+        HUB16 + "  power_limit:\n    channel_current: 6A\n    max_channel_current: {w1: 5A, w2: 5A}\n",
+        True,
+        "CH4 (white1) draws 6.00 A at 100 % but is capped at 5.00 A",
+    ),
+    (
+        "channel cap bad channel",
+        HUB16 + "  power_limit:\n    channel_current: 2A\n    max_channel_current: {ch6: 3A}\n",
+        False,
+        "unknown channel 'ch6'",
+    ),
+    (
+        "channel_current partial without default",
+        HUB16 + "  power_limit:\n    channel_current: {red: 3A}\n    max_chip_current: 5A\n",
+        False,
+        "or give a default",
+    ),
+    (
+        "gain map with default",
+        "ws2915:\n  pin: GPIO16\n  num_chips: 1\n  gain: {default: 31, w2: 20}\n",
+        True,
+        None,
     ),
     (
         "power limit chip cap",

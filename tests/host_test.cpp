@@ -5,6 +5,7 @@
 #include "../components/ws2915/ws2915_frame.h"
 
 #include <cmath>
+#include <initializer_list>
 #include <cstdio>
 #include <cstdlib>
 #include <random>
@@ -148,40 +149,89 @@ static float packed_current(ChipType chip, const uint8_t *bytes, size_t chips, c
   return total;
 }
 
+static PowerModel model(std::initializer_list<float> cur, std::initializer_list<float> caps, float chip, float line) {
+  PowerModel pm{};
+  int i = 0;
+  for (float v : cur)
+    pm.channel_current[i++] = v;
+  i = 0;
+  for (float v : caps)
+    pm.max_channel_current[i++] = v;
+  pm.max_chip_current = chip;
+  pm.max_current = line;
+  return pm;
+}
+
+static uint32_t level_at(ChipType chip, const uint8_t *bytes, size_t c, int ch) {
+  return is_16bit(chip) ? (uint32_t(bytes[c * 10 + ch * 2]) << 8) | bytes[c * 10 + ch * 2 + 1] : bytes[c * 5 + ch];
+}
+
 static void test_power_limit(std::mt19937 &rng) {
-  // dig2analog-5ch maximums: 3 A per RGB channel, 5 A per white channel.
-  const PowerModel none{{3, 3, 3, 5, 5}, 0, 0};
   const uint16_t full[5] = {65535, 65535, 65535, 65535, 65535};
   uint8_t out[10];
+
+  // Strip draws 3 A per RGB channel and 5 A per white channel at 100 %.
+  const PowerModel none = model({3, 3, 3, 5, 5}, {}, 0, 0);
   PowerResult r = pack_frame_limited(CHIP_WS2915, full, 1, none, out);
   CHECK(std::fabs(r.requested - 19.0f) < 1e-3f && !r.limiting, "no-limit model: %f", r.requested);
   CHECK(out[0] == 0xFF && out[9] == 0xFF, "no-limit frame unchanged");
 
-  // Per-chip cap (board fuse).
-  const PowerModel fuse{{3, 3, 3, 5, 5}, 5.0f, 0};
+  // Per-chip cap (board fuse) keeps the colour mix.
+  const PowerModel fuse = model({3, 3, 3, 5, 5}, {}, 5.0f, 0);
   r = pack_frame_limited(CHIP_WS2915, full, 1, fuse, out);
   const float got = packed_current(CHIP_WS2915, out, 1, fuse.channel_current, nullptr);
   CHECK(r.limiting && got <= 5.0f + 1e-4f && got > 4.99f, "chip cap: sent %f", got);
   CHECK(std::fabs(r.actual - got) < 1e-3f, "reported actual %f vs packed %f", r.actual, got);
-  // Colour ratio is kept: R/G/B equal, W1/W2 equal.
   CHECK(out[0] == out[2] && out[2] == out[4] && out[6] == out[8], "chip cap keeps ratios");
 
-  // Random chains: every chip <= its cap, line <= line cap, unaffected chips unchanged.
-  for (int iter = 0; iter < 500; iter++) {
+  // Per-channel caps (dig2analog-5ch: 3 A on CH1-3, 5 A on CH4-5) with a strip that draws
+  // 4 A on CH1 and 6 A on CH5: only CH1 and CH5 are held back, the others stay at 100 %.
+  const PowerModel chan = model({4, 2, 2, 4, 6}, {3, 3, 3, 5, 5}, 0, 0);
+  r = pack_frame_limited(CHIP_WS2915, full, 1, chan, out);
+  CHECK(r.limiting, "channel caps should report limiting");
+  CHECK(level_at(CHIP_WS2915, out, 0, 0) == uint32_t(0.75f * 65535), "CH1 capped to 75 %%: %u",
+        level_at(CHIP_WS2915, out, 0, 0));
+  CHECK(level_at(CHIP_WS2915, out, 0, 1) == 65535 && level_at(CHIP_WS2915, out, 0, 2) == 65535 &&
+            level_at(CHIP_WS2915, out, 0, 3) == 65535,
+        "uncapped channels untouched");
+  CHECK(4.0f * level_at(CHIP_WS2915, out, 0, 0) / 65535 <= 3.0f && 6.0f * level_at(CHIP_WS2915, out, 0, 4) / 65535 <= 5.0f,
+        "capped channels within their rating");
+  // Below its cap a channel is not touched at all.
+  const uint16_t half[5] = {32768, 32768, 32768, 32768, 32768};
+  r = pack_frame_limited(CHIP_WS2915, half, 1, chan, out);
+  CHECK(!r.limiting && level_at(CHIP_WS2915, out, 0, 0) == 32768, "below channel cap: unchanged");
+
+  // Random chains: every channel <= its cap, every chip <= its cap, line <= line cap.
+  for (int iter = 0; iter < 2000; iter++) {
     const size_t chips = 1 + rng() % 16;
     const ChipType type = (iter & 1) ? CHIP_WS2805 : CHIP_WS2915;
     std::vector<uint16_t> lv(chips * 5);
     for (auto &v : lv)
       v = (rng() % 4 == 0) ? 0 : rng() % (full_scale(type) + 1);
-    const PowerModel pm{{3, 3, 3, 5, 5}, (rng() % 2) ? 4.0f + float(rng() % 100) / 10 : 0.0f,
-                        (rng() % 2) ? 2.0f + float(rng() % 400) / 10 : 0.0f};
+    PowerModel pm{};
+    for (int ch = 0; ch < 5; ch++) {
+      pm.channel_current[ch] = float(rng() % 80) / 10;                      // 0..7.9 A
+      pm.max_channel_current[ch] = (rng() % 3) ? float(1 + rng() % 60) / 10 : 0.0f;  // 0.1..6 A or none
+    }
+    pm.max_chip_current = (rng() % 2) ? 4.0f + float(rng() % 100) / 10 : 0.0f;
+    pm.max_current = (rng() % 2) ? 2.0f + float(rng() % 400) / 10 : 0.0f;
     std::vector<uint8_t> bytes(chips * bytes_per_chip(type));
     r = pack_frame_limited(type, lv.data(), chips, pm, bytes.data());
     std::vector<float> per;
     const float total = packed_current(type, bytes.data(), chips, pm.channel_current, &per);
-    if (pm.max_chip_current > 0)
-      for (size_t c = 0; c < chips; c++)
+    for (size_t c = 0; c < chips; c++) {
+      for (int ch = 0; ch < 5; ch++) {
+        const uint32_t sent = level_at(type, bytes.data(), c, ch);
+        CHECK(sent <= lv[c * 5 + ch], "chip %zu ch %d raised %u > %u", c, ch, sent, lv[c * 5 + ch]);
+        if (pm.max_channel_current[ch] > 0) {
+          const float i = pm.channel_current[ch] * float(sent) / float(full_scale(type));
+          CHECK(i <= pm.max_channel_current[ch] + 1e-3f, "chip %zu ch %d: %f > cap %f", c, ch, i,
+                pm.max_channel_current[ch]);
+        }
+      }
+      if (pm.max_chip_current > 0)
         CHECK(per[c] <= pm.max_chip_current + 1e-3f, "chip %zu: %f > %f", c, per[c], pm.max_chip_current);
+    }
     if (pm.max_current > 0)
       CHECK(total <= pm.max_current + 1e-3f, "line %f > %f", total, pm.max_current);
     CHECK(total <= r.actual + 1e-3f, "reported actual %f below packed %f", r.actual, total);

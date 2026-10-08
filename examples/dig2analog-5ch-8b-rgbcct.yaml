@@ -43,13 +43,19 @@ ws2915:
   refresh_interval: 1s
   transition_refresh_rate: 200Hz
   power_limit:
+    # What your strip draws per channel at 100 % (example values: measure yours or take
+    # them from the strip's datasheet). One value, per channel, or default + overrides.
     channel_current:
-      red: 3A
-      green: 3A
-      blue: 3A
-      white1: 5A
-      white2: 5A
-    max_chip_current: 5A
+      red: 2A
+      green: 2A
+      blue: 2A
+      white1: 4A                  # CH4, warm white
+      white2: 4A                  # CH5, cold white
+    max_channel_current:          # dig2analog-5ch ratings: CH1-CH3 3 A, CH4-CH5 5 A
+      default: 3A
+      ch4: 5A
+      ch5: 5A
+    max_chip_current: 5A          # per board: ~80 % of F1 (6.3 A); 6 A with a 7.5 A fuse
 
 output:
   - platform: ws2915

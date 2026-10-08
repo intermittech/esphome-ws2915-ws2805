@@ -43,7 +43,11 @@ ws2915:
   num_chips: ${boards}
   refresh_interval: 1s
   power_limit:
-    channel_current: 2A           # per channel, per board, at 100 %
+    channel_current: 2A           # what each strip draws at 100 % (example value)
+    max_channel_current:          # dig2analog-5ch ratings: CH1-CH3 3 A, CH4-CH5 5 A
+      default: 3A
+      ch4: 5A
+      ch5: 5A
     max_chip_current: 5A          # per board, below F1
     max_power: 240W               # whole line: the power supply
     supply_voltage: 24V

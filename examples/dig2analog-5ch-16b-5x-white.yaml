@@ -43,7 +43,11 @@ ws2915:
   refresh_interval: 1s
   transition_refresh_rate: 200Hz
   power_limit:
-    channel_current: 3A           # one value for all five channels (per board, at 100 %)
+    channel_current: 2.5A         # what each white strip draws at 100 % (example value)
+    max_channel_current:          # dig2analog-5ch ratings: CH1-CH3 3 A, CH4-CH5 5 A
+      default: 3A
+      ch4: 5A
+      ch5: 5A
     max_chip_current: 5A          # per board, below F1
 
 output:

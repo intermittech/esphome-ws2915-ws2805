@@ -276,10 +276,14 @@ void WS2915Component::dump_config() {
   }
   if (this->has_power_model_) {
     const float *c = this->power_.channel_current;
+    const float *m = this->power_.max_channel_current;
     ESP_LOGCONFIG(TAG,
-                  "  Power limit: R/G/B/W1/W2 %.2f/%.2f/%.2f/%.2f/%.2f A at 100 %%\n"
-                  "    max per chip: %.2f A, max line: %.2f A (0 = none)",
-                  c[0], c[1], c[2], c[3], c[4], this->power_.max_chip_current, this->power_.max_current);
+                  "  Power limit (CH1..CH5, 0 = no cap):\n"
+                  "    current at 100 %%: %.2f/%.2f/%.2f/%.2f/%.2f A\n"
+                  "    max per channel:  %.2f/%.2f/%.2f/%.2f/%.2f A\n"
+                  "    max per chip: %.2f A, max line: %.2f A",
+                  c[0], c[1], c[2], c[3], c[4], m[0], m[1], m[2], m[3], m[4], this->power_.max_chip_current,
+                  this->power_.max_current);
   }
   if (this->is_failed())
     ESP_LOGE(TAG, "  Setup FAILED");

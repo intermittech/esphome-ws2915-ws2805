@@ -81,7 +81,7 @@ light:
 | `chip_type` | `ws2915` | `ws2915` or `ws2805` |
 | `pin` | **required** | ESP output pin |
 | `num_chips` | **required** | 1–1024 |
-| `gain` | **required for ws2915** | 0–31 for all channels, or a map `{red: 31, green: 31, blue: 31, white1: 31, white2: 31}` (keys may also be `r/g/b/w1/w2` or `ch1..ch5`). Rejected for `ws2805`. |
+| `gain` | **required for ws2915** | 0–31 for all channels, or a map `{red: 31, green: 31, blue: 31, white1: 31, white2: 31}` (keys may also be `r/g/b/w1/w2`, `ch1..ch5` or `1..5`, plus `default:` for the rest). Rejected for `ws2805`. |
 | `header_format` | `32bit` | ws2915 only: `32bit` (datasheet V1.3/V1.5, 7 check bits `0`) or `26bit` (V1.1, 1 check bit `1`) |
 | `refresh_interval` | `never` | At rest: re-send the unchanged frame this often (≥ 20 ms). This recovers from a frame corrupted by ESD/EMI. |
 | `transition_refresh_rate` | one frame per main loop (16 ms, ~60 fps) | While values change: `200Hz`, `200fps` or a frame interval like `5ms` (1–1000 Hz). Faster than the main loop switches ESPHome's main loop to high-frequency mode while values change, plus 250 ms. |
@@ -109,21 +109,45 @@ The 5-bit gain per channel (R/G/B/W1/W2) is in the header, and every chip on the
 
 ### Power limiter
 
+You describe what is connected, then add any of three caps. All settings apply to every chip on the line.
+
 ```yaml
   power_limit:
-    channel_current:     # LED current per channel at 100 % duty, per chip
-      red: 3A
-      green: 3A
-      blue: 3A
-      white1: 5A
-      white2: 5A         # or one value for all: channel_current: 3A
-    max_chip_current: 5A # per chip/board, e.g. below its fuse; only that board is dimmed
-    max_current: 10A     # whole line, e.g. the PSU; everything is dimmed uniformly
-    # or max_power: 240W + supply_voltage: 24V instead of max_current
+    # What the strips draw per channel at 100 % duty.
+    channel_current:
+      default: 2A          # CH1-CH3
+      ch4: 4A              # warm white
+      ch5: 4A              # cold white
+    # 1. Per channel: the most one channel may carry (dig2analog-5ch: CH1-CH3 3 A, CH4-CH5 5 A).
+    max_channel_current:
+      default: 3A
+      ch4: 5A
+      ch5: 5A
+    # 2. Per board, e.g. below its fuse.
+    max_chip_current: 5A
+    # 3. Whole line, e.g. the power supply.
+    max_current: 10A       # or max_power: 240W + supply_voltage: 24V
 ```
 
+**Per-channel values.** `channel_current` and `max_channel_current` take any of these forms:
+- **One value** for all channels: `channel_current: 2.5A`.
+- **A map per channel**, with keys `ch1`–`ch5`, `1`–`5`, `red/green/blue/white1/white2` or `r/g/b/w1/w2`.
+- **`default:` plus overrides.**
+
+`channel_current` must end up covering all five channels. A channel left out of `max_channel_current` is not capped.
+
+**What each cap dims.** They are applied in the order above. This works the same for RGBCCT, 2 × CCT or 5 × white:
+
+| Cap | When exceeded |
+|---|---|
+| `max_channel_current` | Only that channel is held at its cap. Other channels, and so other lights on the same board, are untouched. Example: a 6 A strip on a 5 A channel never goes above 83 %. |
+| `max_chip_current` | That board is dimmed uniformly, so its colour mix is kept. |
+| `max_current` / `max_power` | Every board is dimmed uniformly. |
+
+`esphome config` reports each channel whose strip draws more than its cap at 100 %, together with the resulting maximum.
+
 - **Estimate:** current = Σ channel_current × duty. This is a model, not a measurement. It is computed after gamma, so it follows real duty.
-- **Scaling:** when a cap is hit, the frame is scaled at send time. The light's target values stay untouched, so the light comes back to full when the load drops, and colour ratios are kept.
+- **Scaling:** limits are applied to the frame at send time. The light's target values stay untouched, so the light comes back to full when the load drops.
 - **Lambdas:**
   - `id(d2a).get_current()`: estimated current after limiting, in A.
   - `id(d2a).get_requested_current()`: current the lights ask for, in A.
@@ -181,7 +205,7 @@ Datasheet V1.1 and V1.5 disagree, and nothing here has been seen on real hardwar
 
 ```bash
 .venv/Scripts/python tests/run_host_test.py      # frame/encoder/limiter, zig C++ (pip install ziglang)
-.venv/Scripts/python tests/validate_configs.py   # 32 schema cases via `esphome config`
+.venv/Scripts/python tests/validate_configs.py   # 38 schema cases via `esphome config`
 .venv/Scripts/esphome compile examples/dig2analog-5ch-16b-rgbcct.yaml
 ```
 
@@ -189,7 +213,7 @@ Datasheet V1.1 and V1.5 disagree, and nothing here has been seen on real hardwar
   - Header layout against WorldSemi's formula `R<<27|G<<22|B<<17|W1<<12|W2<<7` (and V1.1 26-bit).
   - The full bit stream through random RMT chunk sizes (1–200 symbols, up to 1024 chips), decoded back.
   - Wire packing.
-  - The limiter on 500 random chains.
+  - The limiter on 2000 random chains with random channel, board and line caps.
 
 ## Status / limitations
 

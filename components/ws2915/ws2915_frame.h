@@ -95,9 +95,10 @@ inline void pack_frame(ChipType chip, const uint16_t *levels, size_t count, uint
 }
 
 struct PowerModel {
-  float channel_current[CHANNELS_PER_CHIP];  // LED current per channel at 100 % duty, A
-  float max_chip_current;                    // per chip (e.g. its board fuse), A; 0 = no limit
-  float max_current;                         // whole line (e.g. the PSU), A; 0 = no limit
+  float channel_current[CHANNELS_PER_CHIP];      // LED current per channel at 100 % duty, A
+  float max_channel_current[CHANNELS_PER_CHIP];  // per channel (e.g. its MOSFET rating), A; 0 = no limit
+  float max_chip_current;                        // per chip (e.g. its board fuse), A; 0 = no limit
+  float max_current;                             // whole line (e.g. the PSU), A; 0 = no limit
 };
 
 struct PowerResult {
@@ -113,26 +114,56 @@ inline float chip_current(const uint16_t *levels, const float *channel_current, 
   return sum * inv_full_scale;
 }
 
-// pack_frame() with power limiting: chips above max_chip_current are scaled down on their
-// own, then the whole line is scaled uniformly if it is still above max_current. The
-// targets in `levels` are not modified.
+// Highest level each channel may reach under max_channel_current (full scale if uncapped).
+inline void channel_level_caps(const PowerModel &pm, uint32_t full, uint16_t *caps) {
+  for (uint8_t ch = 0; ch < CHANNELS_PER_CHIP; ch++) {
+    caps[ch] = static_cast<uint16_t>(full);
+    const float cap = pm.max_channel_current[ch], cur = pm.channel_current[ch];
+    if (cap > 0.0f && cur > cap)
+      caps[ch] = static_cast<uint16_t>(cap / cur * static_cast<float>(full));  // rounded down
+  }
+}
+
+// One chip's levels after the per-channel caps. Returns true if a channel was capped.
+inline bool clamp_channels(const uint16_t *levels, const uint16_t *caps, uint16_t *out) {
+  bool capped = false;
+  for (uint8_t ch = 0; ch < CHANNELS_PER_CHIP; ch++) {
+    out[ch] = levels[ch] > caps[ch] ? caps[ch] : levels[ch];
+    capped |= levels[ch] > caps[ch];
+  }
+  return capped;
+}
+
+// pack_frame() with power limiting, in three steps:
+//   1. a channel above max_channel_current is capped on its own (other channels, and so
+//      independent lights on the same chip, are not touched);
+//   2. a chip above max_chip_current is scaled down uniformly (its colour mix is kept);
+//   3. if the line is still above max_current, every chip is scaled down uniformly.
+// The targets in `levels` are not modified.
 inline PowerResult pack_frame_limited(ChipType chip, const uint16_t *levels, size_t num_chips, const PowerModel &pm,
                                       uint8_t *out) {
-  const float inv_fs = 1.0f / static_cast<float>(full_scale(chip));
+  const uint32_t full = full_scale(chip);
+  const float inv_fs = 1.0f / static_cast<float>(full);
   const size_t bpc = bytes_per_chip(chip);
   const bool chip_limit = pm.max_chip_current > 0.0f;
+  uint16_t caps[CHANNELS_PER_CHIP];
+  channel_level_caps(pm, full, caps);
+  uint16_t lv[CHANNELS_PER_CHIP];
 
   float requested = 0.0f, after_chip = 0.0f;
   for (size_t c = 0; c < num_chips; c++) {
-    const float i = chip_current(levels + c * CHANNELS_PER_CHIP, pm.channel_current, inv_fs);
-    requested += i;
+    const uint16_t *raw = levels + c * CHANNELS_PER_CHIP;
+    requested += chip_current(raw, pm.channel_current, inv_fs);
+    clamp_channels(raw, caps, lv);
+    const float i = chip_current(lv, pm.channel_current, inv_fs);
     after_chip += (chip_limit && i > pm.max_chip_current) ? pm.max_chip_current : i;
   }
   const float line = (pm.max_current > 0.0f && after_chip > pm.max_current) ? pm.max_current / after_chip : 1.0f;
 
   PowerResult r{requested, 0.0f, line < 1.0f};
   for (size_t c = 0; c < num_chips; c++) {
-    const uint16_t *lv = levels + c * CHANNELS_PER_CHIP;
+    if (clamp_channels(levels + c * CHANNELS_PER_CHIP, caps, lv))
+      r.limiting = true;
     const float i = chip_current(lv, pm.channel_current, inv_fs);
     float s = line;
     if (chip_limit && i > pm.max_chip_current) {

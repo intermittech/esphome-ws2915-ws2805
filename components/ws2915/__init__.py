@@ -68,6 +68,7 @@ CONF_TRANSITION_REFRESH_RATE = "transition_refresh_rate"
 CONF_POWER_LIMIT = "power_limit"
 CONF_CHANNEL_CURRENT = "channel_current"
 CONF_MAX_CHIP_CURRENT = "max_chip_current"
+CONF_MAX_CHANNEL_CURRENT = "max_channel_current"
 CONF_SUPPLY_VOLTAGE = "supply_voltage"
 
 # Order = header/data order in the datasheets (R, G, B, W1, W2) = C++ channel index.
@@ -96,14 +97,25 @@ def validate_channel(value):
 power = cv.float_with_unit("power", "(W|w|watt|Watt|watts|Watts)?")
 
 
-def _channel_map(value_validator, what):
-    """Per-channel mapping that accepts every alias, normalised to CHANNEL_KEYS."""
+CONF_DEFAULT = "default"
+
+
+def _channel_map(value_validator, what, require_all=True):
+    """Per-channel mapping that accepts every channel alias, normalised to CHANNEL_KEYS.
+
+    `default:` applies to every channel not listed. With require_all=False, channels
+    left out (and no default) are omitted from the result.
+    """
 
     def validator(value):
         if not isinstance(value, dict):
-            raise cv.Invalid(f"{what} must be a mapping of channel -> value")
+            raise cv.Invalid(f"{what} must be a value or a mapping of channel -> value")
         out = {}
+        default = None
         for raw_key, raw_val in value.items():
+            if str(raw_key).lower() == CONF_DEFAULT:
+                default = value_validator(raw_val)
+                continue
             try:
                 name = CHANNEL_KEYS[validate_channel(raw_key)]
             except cv.Invalid as err:
@@ -111,10 +123,15 @@ def _channel_map(value_validator, what):
             if name in out:
                 raise cv.Invalid(f"channel '{name}' given twice", [raw_key])
             out[name] = value_validator(raw_val)
+        for k in CHANNEL_KEYS:
+            if k not in out and default is not None:
+                out[k] = default
         missing = [k for k in CHANNEL_KEYS if k not in out]
-        if missing:
-            raise cv.Invalid(f"{what}: missing channel(s) {', '.join(missing)}")
-        return out
+        if missing and require_all:
+            raise cv.Invalid(
+                f"{what}: missing channel(s) {', '.join(missing)} (or give a default:)"
+            )
+        return {k: out[k] for k in CHANNEL_KEYS if k in out}
 
     return validator
 
@@ -138,6 +155,18 @@ def validate_channel_current(value):
     if isinstance(value, dict):
         return _CURRENT_MAP(value)
     v = cv.current(value)
+    return {k: v for k in CHANNEL_KEYS}
+
+
+_CHANNEL_CAP = cv.All(cv.current, cv.Range(min=0.01))
+_CHANNEL_CAP_MAP = _channel_map(_CHANNEL_CAP, "max_channel_current", require_all=False)
+
+
+def validate_max_channel_current(value):
+    """One cap for every channel, or per channel (channels left out are not capped)."""
+    if isinstance(value, dict):
+        return _CHANNEL_CAP_MAP(value)
+    v = _CHANNEL_CAP(value)
     return {k: v for k in CHANNEL_KEYS}
 
 
@@ -270,9 +299,11 @@ def _validate_transition_rate(value):
 
 def _validate_power_limit(value):
     value = POWER_LIMIT_SCHEMA(value)
-    if not any(k in value for k in (CONF_MAX_CHIP_CURRENT, CONF_MAX_CURRENT, CONF_MAX_POWER)):
+    caps = (CONF_MAX_CHANNEL_CURRENT, CONF_MAX_CHIP_CURRENT, CONF_MAX_CURRENT, CONF_MAX_POWER)
+    if not any(k in value for k in caps):
         raise cv.Invalid(
-            "power_limit needs max_chip_current and/or one of max_current / max_power"
+            "power_limit needs at least one of max_channel_current, max_chip_current, "
+            "max_current / max_power"
         )
     if CONF_MAX_CURRENT in value and CONF_MAX_POWER in value:
         raise cv.Invalid("power_limit: use max_current or max_power, not both")
@@ -285,6 +316,18 @@ def _validate_power_limit(value):
             "power_limit: supply_voltage is only used with max_power",
             [CONF_SUPPLY_VOLTAGE],
         )
+    for key, cap in value.get(CONF_MAX_CHANNEL_CURRENT, {}).items():
+        draw = value[CONF_CHANNEL_CURRENT][key]
+        if draw > cap:
+            _LOGGER.info(
+                "ws2915: CH%d (%s) draws %.2f A at 100 %% but is capped at %.2f A, "
+                "so it will not exceed %.0f %%",
+                CHANNEL_KEYS.index(key) + 1,
+                key,
+                draw,
+                cap,
+                cap / draw * 100,
+            )
     return value
 
 
@@ -292,6 +335,9 @@ POWER_LIMIT_SCHEMA = cv.Schema(
     {
         # LED current of each channel at 100 % duty, per chip (same for every chip on this line).
         cv.Required(CONF_CHANNEL_CURRENT): validate_channel_current,
+        # Cap per channel, e.g. its MOSFET / terminal rating. Only that channel is held back,
+        # so independent lights on the same chip are not affected.
+        cv.Optional(CONF_MAX_CHANNEL_CURRENT): validate_max_channel_current,
         # Cap per chip / board, e.g. below its fuse. Only the overloaded chip is dimmed.
         cv.Optional(CONF_MAX_CHIP_CURRENT): cv.All(cv.current, cv.Range(min=0.01)),
         # Cap for the whole line, e.g. the supply. All chips are dimmed uniformly.
@@ -416,6 +462,8 @@ async def to_code(config: ConfigType) -> None:
         plim = config[CONF_POWER_LIMIT]
         for idx, key in enumerate(CHANNEL_KEYS):
             cg.add(var.set_channel_current(idx, plim[CONF_CHANNEL_CURRENT][key]))
+        for key, cap in plim.get(CONF_MAX_CHANNEL_CURRENT, {}).items():
+            cg.add(var.set_max_channel_current(CHANNEL_KEYS.index(key), cap))
         if CONF_MAX_CHIP_CURRENT in plim:
             cg.add(var.set_max_chip_current(plim[CONF_MAX_CHIP_CURRENT]))
         if CONF_MAX_CURRENT in plim:
