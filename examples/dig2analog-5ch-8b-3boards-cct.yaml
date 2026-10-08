@@ -1,5 +1,6 @@
 # dig2analog-5ch-8b (WS2805, 8-bit) as two CCT lights + one single-colour light.
-#   CH1/CH2 = CCT A (cold/warm), CH3/CH4 = CCT B (cold/warm), CH5 = single white
+#   CH1/CH2 = CCT A (warm/cold), CH3/CH4 = CCT B (warm/cold), CH5 = single white
+#   (warm on the lower channel, as CH4 = WW / CH5 = CW in the RGBCCT examples)
 # Shows cwww with constant_brightness and three boards on one line.
 
 substitutions:
@@ -70,16 +71,16 @@ output:
 light:
   - platform: cwww
     name: Board 1 CCT A
-    cold_white: b1_ch1
-    warm_white: b1_ch2
+    cold_white: b1_ch2
+    warm_white: b1_ch1
     cold_white_color_temperature: 6500 K
     warm_white_color_temperature: 2700 K
     constant_brightness: true
     default_transition_length: 1s
   - platform: cwww
     name: Board 1 CCT B
-    cold_white: b1_ch3
-    warm_white: b1_ch4
+    cold_white: b1_ch4
+    warm_white: b1_ch3
     cold_white_color_temperature: 6500 K
     warm_white_color_temperature: 2700 K
     constant_brightness: true
@@ -91,15 +92,15 @@ light:
 
   - platform: cwww
     name: Board 2 CCT A
-    cold_white: b2_ch1
-    warm_white: b2_ch2
+    cold_white: b2_ch2
+    warm_white: b2_ch1
     cold_white_color_temperature: 6500 K
     warm_white_color_temperature: 2700 K
     constant_brightness: true
   - platform: cwww
     name: Board 2 CCT B
-    cold_white: b2_ch3
-    warm_white: b2_ch4
+    cold_white: b2_ch4
+    warm_white: b2_ch3
     cold_white_color_temperature: 6500 K
     warm_white_color_temperature: 2700 K
     constant_brightness: true
@@ -109,15 +110,15 @@ light:
 
   - platform: cwww
     name: Board 3 CCT A
-    cold_white: b3_ch1
-    warm_white: b3_ch2
+    cold_white: b3_ch2
+    warm_white: b3_ch1
     cold_white_color_temperature: 6500 K
     warm_white_color_temperature: 2700 K
     constant_brightness: true
   - platform: cwww
     name: Board 3 CCT B
-    cold_white: b3_ch3
-    warm_white: b3_ch4
+    cold_white: b3_ch4
+    warm_white: b3_ch3
     cold_white_color_temperature: 6500 K
     warm_white_color_temperature: 2700 K
     constant_brightness: true

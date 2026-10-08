@@ -40,8 +40,8 @@ output:
   - { platform: ws2915, id: out_red,   channel: 1 }
   - { platform: ws2915, id: out_green, channel: 2 }
   - { platform: ws2915, id: out_blue,  channel: 3 }
-  - { platform: ws2915, id: out_cold,  channel: 4 }
-  - { platform: ws2915, id: out_warm,  channel: 5 }
+  - { platform: ws2915, id: out_warm,  channel: 4 }   # W1 = warm white
+  - { platform: ws2915, id: out_cold,  channel: 5 }   # W2 = cold white
 
 light:
   - platform: rgbww
@@ -96,7 +96,7 @@ light:
 
 | Option | |
 |---|---|
-| `channel` | `1`–`5` (board CH1–CH5), `ch1`–`ch5`, `red/green/blue/white1/white2` or `r/g/b/w1/w2`. Wire order is R, G, B, W1, W2. |
+| `channel` | `1`–`5` (board CH1–CH5), `ch1`–`ch5`, `red/green/blue/white1/white2` or `r/g/b/w1/w2`. Wire order is R, G, B, W1, W2. For RGBCCT use W1 (CH4) = warm white and W2 (CH5) = cold white, the WLED order (RGB + WW + CW). |
 | `chip` | 0-based position on the line (default 0) |
 | `ws2915_id` | hub id if there is more than one line |
 | stock | `min_power`, `max_power`, `zero_means_zero`, `inverted`, `power_supply` |

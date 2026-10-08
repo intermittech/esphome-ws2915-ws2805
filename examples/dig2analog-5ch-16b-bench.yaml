@@ -100,7 +100,7 @@ number:
     set_action:
       - lambda: id(d2a).set_raw(0, 2, (uint16_t) x);
   - platform: template
-    name: Raw CH4 (W1)
+    name: Raw CH4 (W1, WW)
     min_value: 0
     max_value: 65535
     step: 1
@@ -110,7 +110,7 @@ number:
     set_action:
       - lambda: id(d2a).set_raw(0, 3, (uint16_t) x);
   - platform: template
-    name: Raw CH5 (W2)
+    name: Raw CH5 (W2, CW)
     min_value: 0
     max_value: 65535
     step: 1

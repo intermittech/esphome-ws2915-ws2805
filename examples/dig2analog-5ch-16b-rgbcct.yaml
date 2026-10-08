@@ -1,5 +1,5 @@
 # dig2analog-5ch-16b (WS2915, 16-bit) as one RGBCCT light.
-#   CH1 R, CH2 G, CH3 B, CH4 (W1) cold white, CH5 (W2) warm white
+#   CH1 R, CH2 G, CH3 B, CH4 (W1) warm white, CH5 (W2) cold white (WLED order: RGB + WW + CW)
 # ESP32 classic, ESP-IDF. Everything under `light:` is stock ESPHome (gamma, colour
 # temperature in K or mireds, colour interlock, transitions, effects).
 
@@ -69,10 +69,10 @@ output:
     id: out_blue
     channel: 3
   - platform: ws2915
-    id: out_cold
+    id: out_warm
     channel: 4
   - platform: ws2915
-    id: out_warm
+    id: out_cold
     channel: 5
     # Stock output options work as on ledc, e.g. a floor for the lowest dim level:
     # min_power: 0.001

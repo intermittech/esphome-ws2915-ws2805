@@ -1,5 +1,5 @@
 # dig2analog-5ch-8b (WS2805, 8-bit) as one RGBCCT light.
-#   CH1 R, CH2 G, CH3 B, CH4 (W1) cold white, CH5 (W2) warm white
+#   CH1 R, CH2 G, CH3 B, CH4 (W1) warm white, CH5 (W2) cold white (WLED order: RGB + WW + CW)
 # Same as the 16b example; the WS2805 has no gain header.
 
 substitutions:
@@ -62,10 +62,10 @@ output:
     id: out_blue
     channel: blue
   - platform: ws2915
-    id: out_cold
+    id: out_warm
     channel: white1
   - platform: ws2915
-    id: out_warm
+    id: out_cold
     channel: white2
 
 light:
