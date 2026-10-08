@@ -76,6 +76,7 @@ CONF_MAX_CHIP_CURRENT = "max_chip_current"
 CONF_MAX_CHANNEL_CURRENT = "max_channel_current"
 CONF_SUPPLY_VOLTAGE = "supply_voltage"
 CONF_POWER_ON_DELAY = "power_on_delay"
+CONF_WS2915_ID = "ws2915_id"
 
 # Order = header/data order in the datasheets (R, G, B, W1, W2) = C++ channel index.
 CHANNEL_KEYS = [CONF_RED, CONF_GREEN, CONF_BLUE, CONF_WHITE1, CONF_WHITE2]
@@ -399,9 +400,9 @@ CONFIG_SCHEMA = cv.All(
             # the main loop keeps the loop in high-frequency mode until the light settles.
             cv.Optional(CONF_TRANSITION_REFRESH_RATE): _validate_transition_rate,
             cv.Optional(CONF_POWER_LIMIT): _validate_power_limit,
-            # Request this supply while any channel on the line is above 0 (instead of
-            # power_supply: on each output). Give the supply enable_time: 0ms and use
-            # power_on_delay, which waits without blocking the main loop.
+            # Default supply for every channel whose output has no power_supply of its own.
+            # Supplies (here or on outputs) are switched by this driver without blocking;
+            # give them enable_time: 0ms and use power_on_delay.
             cv.Optional(CONF_POWER_SUPPLY): cv.use_id(power_supply.PowerSupply),
             # Time the boards need after power-on before they take data: after boot, and
             # after power_supply switches on. Frames are held meanwhile (non-blocking).
@@ -434,6 +435,15 @@ CONFIG_SCHEMA = cv.All(
 )
 
 
+def _hub_outputs(full_config, hub_id):
+    """Output configs (platform ws2915) that belong to hub `hub_id`."""
+    return [
+        out
+        for out in full_config.get("output", []) or []
+        if out.get("platform") == "ws2915" and out.get(CONF_WS2915_ID) == hub_id
+    ]
+
+
 def _power_supply_config(full_config, psu_id):
     for conf in full_config.get("power_supply", []) or []:
         if conf[CONF_ID] == psu_id:
@@ -441,26 +451,53 @@ def _power_supply_config(full_config, psu_id):
     return None
 
 
+def keep_on_time_ms(full_config, psu_id) -> int:
+    """keep_on_time of power_supply `psu_id` (0 if it cannot be found)."""
+    conf = _power_supply_config(full_config, psu_id)
+    return int(conf[CONF_KEEP_ON_TIME].total_milliseconds) if conf else 0
+
+
 def _final_validate(configs):
     full = fv.full_config.get()
     for conf in configs if isinstance(configs, list) else [configs]:
-        if CONF_POWER_SUPPLY not in conf:
-            continue
-        psu = _power_supply_config(full, conf[CONF_POWER_SUPPLY])
-        if psu is None:
-            continue
-        enable_ms = psu[CONF_ENABLE_TIME].total_milliseconds
-        if enable_ms > 50:
-            _LOGGER.warning(
-                "ws2915: power_supply '%s' has enable_time %d ms, which blocks the main loop "
-                "on every switch-on; set enable_time: 0ms and use power_on_delay on ws2915",
-                conf[CONF_POWER_SUPPLY],
-                enable_ms,
-            )
+        # Supplies used by this line: its default, and any set on its outputs.
+        used = {}
+        if CONF_POWER_SUPPLY in conf:
+            used[str(conf[CONF_POWER_SUPPLY])] = conf[CONF_POWER_SUPPLY]
+        for out in _hub_outputs(full, conf[CONF_ID]):
+            if CONF_POWER_SUPPLY in out:
+                used[str(out[CONF_POWER_SUPPLY])] = out[CONF_POWER_SUPPLY]
+        for name, psu_id in used.items():
+            psu = _power_supply_config(full, psu_id)
+            if psu is None:
+                continue
+            enable_ms = psu[CONF_ENABLE_TIME].total_milliseconds
+            if enable_ms > 50:
+                _LOGGER.warning(
+                    "ws2915: power_supply '%s' has enable_time %d ms, which blocks the main "
+                    "loop on every switch-on; set enable_time: 0ms and use power_on_delay on "
+                    "ws2915 '%s' instead",
+                    name,
+                    enable_ms,
+                    conf[CONF_ID],
+                )
     return configs
 
 
 FINAL_VALIDATE_SCHEMA = _final_validate
+
+_LIGHT_OUTPUT_KEYS = ("output", "red", "green", "blue", "white", "cold_white", "warm_white")
+
+
+def _hub_lights(full_config, hub_id):
+    """(light id, [output ids on this line]) for every light that uses this line."""
+    ours = {o[CONF_ID] for o in _hub_outputs(full_config, hub_id)}
+    found = []
+    for light in full_config.get("light", []) or []:
+        outs = [light[k] for k in _LIGHT_OUTPUT_KEYS if light.get(k) in ours]
+        if outs:
+            found.append((light[CONF_ID], outs))
+    return found
 
 
 async def to_code(config: ConfigType) -> None:
@@ -506,10 +543,13 @@ async def to_code(config: ConfigType) -> None:
     if CONF_POWER_ON_DELAY in config:
         cg.add(var.set_power_on_delay(config[CONF_POWER_ON_DELAY].total_milliseconds))
     if CONF_POWER_SUPPLY in config:
+        # Default for channels whose output has no power_supply of its own.
         psu = await cg.get_variable(config[CONF_POWER_SUPPLY])
-        psu_conf = _power_supply_config(CORE.config, config[CONF_POWER_SUPPLY])
-        keep_on = psu_conf[CONF_KEEP_ON_TIME].total_milliseconds if psu_conf else 0
-        cg.add(var.set_power_supply(psu, keep_on))
+        cg.add(
+            var.set_default_power_supply(
+                psu, keep_on_time_ms(CORE.config, config[CONF_POWER_SUPPLY])
+            )
+        )
 
     if CONF_POWER_LIMIT in config:
         plim = config[CONF_POWER_LIMIT]
@@ -525,3 +565,11 @@ async def to_code(config: ConfigType) -> None:
             cg.add(
                 var.set_max_current(plim[CONF_MAX_POWER] / plim[CONF_SUPPLY_VOLTAGE])
             )
+
+    # Lights on this line: after a power-on hold, a fade-in that ran in the dark is replayed
+    # with the length the call used. Registered last; their variables exist by now.
+    if CONF_POWER_ON_DELAY in config:
+        for light_id, out_ids in _hub_lights(CORE.config, config[CONF_ID]):
+            light_var = await cg.get_variable(light_id)
+            outs = [await cg.get_variable(o) for o in out_ids]
+            cg.add(var.add_light(light_var, outs))

@@ -70,7 +70,7 @@ light:
 | Refresh at rest | `ws2915` | `refresh_interval` |
 | Refresh during transitions/effects | `ws2915` | `transition_refresh_rate` |
 | Lowest / highest level | output | `min_power`, `max_power`, `zero_means_zero` (stock) |
-| Switch a PSU on/off | `ws2915` | `power_supply` + `power_on_delay` (non-blocking, see below) |
+| Switch a PSU on/off | output (or `ws2915` as default) | `power_supply`, plus `power_on_delay` on `ws2915` (non-blocking, see below) |
 | Power / current limit | `ws2915` | `power_limit` |
 
 ## `ws2915:` options
@@ -86,8 +86,8 @@ light:
 | `refresh_interval` | `never` | At rest: re-send the unchanged frame this often (≥ 20 ms). This recovers from a frame corrupted by ESD/EMI. |
 | `transition_refresh_rate` | one frame per main loop (16 ms, ~60 fps) | While values change: `200Hz`, `200fps` or a frame interval like `5ms` (1–1000 Hz). Faster than the main loop switches ESPHome's main loop to high-frequency mode while values change, plus 250 ms. |
 | `power_limit` | – | see below |
-| `power_supply` | – | id of a `power_supply:`. It is requested while any channel on this line is above 0. |
-| `power_on_delay` | 0 | Time the boards need after power-on before they take data (≤ 30 s). It applies after boot, and after `power_supply` really switches on. Frames are held without blocking. |
+| `power_supply` | – | Default supply for outputs without their own `power_supply:`. |
+| `power_on_delay` | 0 | Time the boards need after power-on before they take data (≤ 30 s). It applies after boot, and after a supply really switches on. That supply's channels are sent as 0 meanwhile, without blocking. |
 | `bit0_high` / `bit0_low` | 340 / 960 ns | Valid for both chips; out-of-datasheet values give a warning. |
 | `bit1_high` / `bit1_low` | 700 / 650 ns | WS2915 T1H 520–1000 ns, WS2805 580–1000 ns |
 | `reset_time` | 300 µs | > 280 µs, ≤ 800 µs |
@@ -101,7 +101,8 @@ light:
 | `channel` | `1`–`5` (board CH1–CH5), `ch1`–`ch5`, `red/green/blue/white1/white2` or `r/g/b/w1/w2`. Wire order is R, G, B, W1, W2. For RGBCCT use W1 (CH4) = warm white and W2 (CH5) = cold white, the WLED order (RGB + WW + CW). |
 | `chip` | 0-based position on the line (default 0) |
 | `ws2915_id` | hub id if there is more than one line |
-| stock | `min_power`, `max_power`, `zero_means_zero`, `inverted`, `power_supply` |
+| stock | `min_power`, `max_power`, `zero_means_zero`, `inverted` |
+| `power_supply` | Supply this channel needs. Switched by the driver (non-blocking, see below). |
 
 ### WS2915 gain
 
@@ -157,29 +158,61 @@ You describe what is connected, then add any of three caps. All settings apply t
 
 ### Power supply and power-on delay
 
-ESPHome's own `power_supply` waits for `enable_time` with a blocking `delay()`. For boards that need seconds
-after switch-on, let the `ws2915:` block request the supply and do the waiting instead:
+Put `power_supply:` on the outputs as in stock ESPHome. Each output can use a different supply (one per
+board, or per channel group). The ws2915 driver does the switching itself, without ESPHome's blocking
+`enable_time` wait:
 
 ```yaml
 power_supply:
-  - id: led_psu
+  - id: psu_board1
     pin: GPIO13            # avoid GPIO12 on ESP32 (boot strapping pin)
-    enable_time: 0ms       # ws2915 waits instead, without blocking
+    enable_time: 0ms       # the driver waits instead, without blocking
     keep_on_time: 60s      # switching back on within this time needs no delay
+  - id: psu_board2
+    pin: GPIO14
+    enable_time: 0ms
+    keep_on_time: 60s
 
 ws2915:
-  power_supply: led_psu    # instead of power_supply: on every output
-  power_on_delay: 1.5s
+  power_on_delay: 1.5s     # boards need this long after power-on
+  # power_supply: psu_board1  # optional default for outputs without their own
+
+output:
+  - platform: ws2915
+    id: b1_red
+    chip: 0
+    channel: 1
+    power_supply: psu_board1
+  - platform: ws2915
+    id: b2_red
+    chip: 1
+    channel: 1
+    power_supply: psu_board2
 ```
 
-1. **Switch-on:** the first channel above 0 requests the supply. The driver holds frames for `power_on_delay` while the main loop keeps running, then sends the current state.
-2. **Switch-off:** when every channel is back at 0, the driver releases the supply, which switches off after `keep_on_time`.
-3. **No delay when already on:** a switch-on within `keep_on_time`, or while something else holds the supply, isn't delayed.
-4. **Without `power_supply`:** `power_on_delay` only applies after boot, measured from power-on, for boards powered together with the ESP.
-5. **Warning:** `esphome config` warns when the linked supply still has an `enable_time` above 50 ms.
+1. **Switch-on:** a supply is requested when the first of its channels goes above 0. If it was really off,
+   its channels are sent as 0 for `power_on_delay`. Other channels and boards on the line keep updating
+   normally, and the main loop never blocks.
+2. **Switch-off:** when all of a supply's channels are back at 0, the driver releases it. ESPHome switches it
+   off after `keep_on_time`.
+3. **No delay when already on:** a switch-on within `keep_on_time`, or while something else holds the
+   supply, isn't delayed.
+4. **After boot:**
+   - Channels without a supply (powered together with the ESP) are held until `power_on_delay` after
+     power-on.
+   - A supply with `enable_on_boot` is held for `power_on_delay` from boot.
+5. **Fade-in replay:** a light's transition runs on ESPHome's clock, so it may finish while its boards are
+   still dark. When all supplies of a light are ready, a fade-in that already finished is replayed from
+   off. It uses the length that call actually had: `default_transition_length`, or the transition Home
+   Assistant sent.
+   - A transition still running at that moment is left alone; the rest of it is visible.
+   - A light switched on without a transition just appears.
+   - Lights running an effect are skipped.
+   - At boot ESPHome restores lights without a transition, so they appear when the hold ends.
 
-- **Fades during the delay:** the boards are dark while they power up, so a fade-in shorter than the delay looks like a jump. A longer `keep_on_time` makes the delay rare.
-- **Status:** `id(d2a).is_power_ready()` is false while frames are held.
+- **Check:** `esphome config` warns when a supply used by the line still has an `enable_time` above 50 ms.
+- **Log lines:** `Power-on (group n): holding its channels at 0 for … ms`, `Power ready (group n)` and `Replaying the … ms fade-in of '…'` (DEBUG level).
+- **Status:** `id(d2a).is_power_ready()` is false while any channel is held.
 
 ### Runtime API (lambdas)
 
@@ -233,7 +266,7 @@ Datasheet V1.1 and V1.5 disagree, and nothing here has been seen on real hardwar
 
 ```bash
 .venv/Scripts/python tests/run_host_test.py      # frame/encoder/limiter, zig C++ (pip install ziglang)
-.venv/Scripts/python tests/validate_configs.py   # 43 schema cases via `esphome config`
+.venv/Scripts/python tests/validate_configs.py   # 49 schema cases via `esphome config`
 .venv/Scripts/esphome compile examples/dig2analog-5ch-16b-rgbcct.yaml
 ```
 

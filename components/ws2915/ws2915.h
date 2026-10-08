@@ -11,9 +11,14 @@
 #ifdef USE_POWER_SUPPLY
 #include "esphome/components/power_supply/power_supply.h"
 #endif
+#ifdef USE_LIGHT
+#include "esphome/components/light/light_state.h"
+#endif
 
 #include <driver/rmt_encoder.h>
 #include <driver/rmt_tx.h>
+
+#include <vector>
 
 namespace esphome::ws2915 {
 
@@ -29,6 +34,8 @@ class WS2915Component final : public Component {
     void set_parent(WS2915Component *parent) { this->parent_ = parent; }
     void set_chip(uint16_t chip) { this->chip_ = chip; }
     void set_channel(uint8_t channel) { this->channel_ = channel; }
+    uint16_t get_chip() const { return this->chip_; }
+    uint8_t get_channel() const { return this->channel_; }
 
    protected:
     void write_state(float state) override { this->parent_->set_level_(this->chip_, this->channel_, state); }
@@ -78,17 +85,24 @@ class WS2915Component final : public Component {
   }
   void set_max_chip_current(float amps) { this->power_.max_chip_current = amps; }
   void set_max_current(float amps) { this->power_.max_current = amps; }
-  /// Time the chips need after power-on before they take data. Frames are held (without
-  /// blocking) for this long after boot and after the power supply switches on.
+  /// Time the boards need after power-on before they take data. After boot, and after a
+  /// power supply really switches on, the channels it powers are sent as 0 for this long
+  /// (non-blocking; the rest of the line keeps updating).
   void set_power_on_delay(uint32_t ms) { this->power_on_delay_ms_ = ms; }
+#ifdef USE_LIGHT
+  /// A light that uses `outputs` of this line. When its supply comes out of a power-on hold,
+  /// a fade-in that already finished in the dark is replayed from off with the same length
+  /// (default_transition_length or whatever the call asked for).
+  void add_light(light::LightState *light, const std::vector<Channel *> &outputs);
+#endif
 #ifdef USE_POWER_SUPPLY
-  /// Request `psu` while any channel on this line is above 0. keep_on_time_ms is the
-  /// supply's keep_on_time, so a re-request inside it is known to need no power-on delay.
-  void set_power_supply(power_supply::PowerSupply *psu, uint32_t keep_on_time_ms) {
-    this->psu_ = psu;
-    this->psu_req_.set_parent(psu);
-    this->psu_keep_on_ms_ = keep_on_time_ms;
-  }
+  /// Channel (chip, channel) is powered by `psu` (power_supply: on its output). The driver
+  /// requests the supply while any of its channels is above 0, instead of the output doing
+  /// it with ESPHome's blocking enable_time. keep_on_time_ms is the supply's keep_on_time.
+  void add_channel_power_supply(uint16_t chip, uint8_t channel, power_supply::PowerSupply *psu,
+                                uint32_t keep_on_time_ms);
+  /// Supply for every channel of this line without a power_supply of its own.
+  void set_default_power_supply(power_supply::PowerSupply *psu, uint32_t keep_on_time_ms);
 #endif
 
   // Runtime API (lambdas / bench). Gain and header format are chain-wide.
@@ -106,8 +120,14 @@ class WS2915Component final : public Component {
   /// Current the lights ask for before limiting, in A (needs power_limit).
   float get_requested_current() const { return this->requested_current_; }
   bool is_limiting() const { return this->limiting_; }
-  /// False while frames are held for power_on_delay.
-  bool is_power_ready() const { return !this->power_waiting_; }
+  /// False while any channel is held at 0 for power_on_delay.
+  bool is_power_ready() const {
+    for (const auto &g : this->groups_) {
+      if (g.waiting)
+        return false;
+    }
+    return true;
+  }
   uint16_t get_num_chips() const { return this->num_chips_; }
 
  protected:
@@ -120,8 +140,12 @@ class WS2915Component final : public Component {
   void mark_changed_();
   void request_frame_();
   void transmit_();
-  void update_power_();
-  void start_power_wait_(uint32_t ms);
+  void update_group_(uint8_t group);
+  void start_group_wait_(uint8_t group, uint32_t ms);
+  uint8_t group_at_(size_t index) const { return this->group_of_ != nullptr ? this->group_of_[index] : 0; }
+#ifdef USE_POWER_SUPPLY
+  uint8_t group_for_(power_supply::PowerSupply *psu, uint32_t keep_on_time_ms);
+#endif
 
   ChipType chip_type_{CHIP_WS2915};
   HeaderFormat header_format_{HEADER_32BIT};
@@ -153,16 +177,53 @@ class WS2915Component final : public Component {
   bool limiting_{false};
 
   uint32_t power_on_delay_ms_{0};
-  bool power_waiting_{false};
-  size_t nonzero_{0};  // channels above 0 on the whole line
+
+  /// Channels that share a power source. Group 0: no power_supply (powered with the ESP).
+  struct PowerGroup {
 #ifdef USE_POWER_SUPPLY
-  power_supply::PowerSupply *psu_{nullptr};
-  power_supply::PowerSupplyRequester psu_req_;
-  bool psu_requested_{false};
-  bool psu_released_{false};
-  uint32_t psu_released_ms_{0};
-  uint32_t psu_keep_on_ms_{0};
+    power_supply::PowerSupply *psu{nullptr};
+    power_supply::PowerSupplyRequester req;
+    uint32_t keep_on_ms{0};
+    bool requested{false};
+    bool released{false};
+    uint32_t released_ms{0};
 #endif
+    uint32_t active{0};   // its channels above 0
+    bool waiting{false};  // powering up: its channels are sent as 0
+  };
+#ifdef USE_LIGHT
+  /// Measures each call's transition: a call publishes remote values, and the target is
+  /// reached when its transition ends; the difference is the length that was used.
+  class LightWatch final : public light::LightRemoteValuesListener, public light::LightTargetStateReachedListener {
+   public:
+    void on_light_remote_values_update() override {
+      this->call_ms = millis();
+      this->reached = false;
+    }
+    void on_light_target_state_reached() override {
+      this->length_ms = millis() - this->call_ms;
+      this->reached = true;
+    }
+    light::LightState *light{nullptr};
+    std::vector<Channel *> outputs;
+    uint32_t groups{0};  // bit mask of the power groups of its outputs
+    uint32_t call_ms{0};
+    uint32_t length_ms{0};
+    bool reached{false};
+  };
+  void replay_light_(LightWatch *watch);
+  std::vector<LightWatch *> lights_;
+#endif
+  struct ChannelSupply {
+    uint16_t chip;
+    uint8_t channel;
+    uint8_t group;
+  };
+  std::vector<PowerGroup> groups_ = std::vector<PowerGroup>(1);
+  std::vector<ChannelSupply> channel_supplies_;  // from codegen, applied in setup()
+  uint8_t default_group_{0};
+  uint8_t *group_of_{nullptr};     // group per level (only with more than one group)
+  uint16_t *out_levels_{nullptr};  // levels with held groups at 0 (only with power_on_delay)
 
   uint16_t *levels_{nullptr};  // targets, chip-major, before power limiting
   uint8_t *tx_buf_{nullptr};   // wire bytes of the frame on the line

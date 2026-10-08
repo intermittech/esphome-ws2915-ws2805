@@ -38,7 +38,7 @@ ws2915:
 PSU = """\
 power_supply:
   - id: psu
-    pin: GPIO12
+    pin: GPIO13
     enable_time: {enable}
 """
 
@@ -200,6 +200,60 @@ CASES = [
         "enable_time 1500 ms, which blocks the main loop",
     ),
     ("hub power_supply unknown id", HUB16 + "  power_supply: nope\n", False, "nope"),
+    ("power_on_fade is gone", HUB16 + "  power_on_delay: 1.5s\n  power_on_fade: 2s\n", False, "power_on_fade"),
+    (
+        "light on a held line",
+        PSU.format(enable="0ms")
+        + HUB16
+        + "  power_on_delay: 1.5s\n"
+        + OUT.format(channel=1, chip=0)
+        + "    power_supply: psu\n"
+        "light:\n  - platform: monochromatic\n    name: L\n    output: o1\n"
+        "    default_transition_length: 2s\n",
+        True,
+        None,
+    ),
+    (
+        "power_supply on hub (default) and output",
+        PSU.format(enable="0ms")
+        + HUB16
+        + "  power_supply: psu\n"
+        + OUT.format(channel=1, chip=0)
+        + "    power_supply: psu\n",
+        True,
+        None,
+    ),
+    (
+        "power_supply on outputs, delay on hub",
+        PSU.format(enable="0ms")
+        + HUB16
+        + "  power_on_delay: 1.5s\n"
+        + OUT.format(channel=1, chip=0)
+        + "    power_supply: psu\n",
+        True,
+        "!blocks the main loop",
+    ),
+    (
+        "two outputs on two supplies",
+        "power_supply:\n  - id: psu_a\n    pin: GPIO13\n    enable_time: 0ms\n"
+        "  - id: psu_b\n    pin: GPIO14\n    enable_time: 0ms\n"
+        + HUB16.replace("num_chips: 1", "num_chips: 2")
+        + "  power_on_delay: 1.5s\n"
+        "output:\n"
+        "  - {platform: ws2915, id: a1, chip: 0, channel: 1, power_supply: psu_a}\n"
+        "  - {platform: ws2915, id: b1, chip: 1, channel: 1, power_supply: psu_b}\n",
+        True,
+        None,
+    ),
+    (
+        "output supply with blocking enable_time",
+        PSU.format(enable="1500ms")
+        + HUB16
+        + OUT.format(channel=1, chip=0)
+        + "    power_supply: psu\n",
+        True,
+        "enable_time 1500 ms, which blocks the main loop",
+    ),
 ]
 
 
