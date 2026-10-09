@@ -184,7 +184,7 @@ static void test_power_limit(std::mt19937 &rng) {
   CHECK(std::fabs(r.actual - got) < 1e-3f, "reported actual %f vs packed %f", r.actual, got);
   CHECK(out[0] == out[2] && out[2] == out[4] && out[6] == out[8], "chip cap keeps ratios");
 
-  // Per-channel caps (dig2analog-5ch: 3 A on CH1-3, 5 A on CH4-5) with a strip that draws
+  // Per-channel caps (QuinLED dig2analog-5ch: 3 A on CH1-3, 5 A on CH4-5) with a strip that draws
   // 4 A on CH1 and 6 A on CH5: only CH1 and CH5 are held back, the others stay at 100 %.
   const PowerModel chan = model({4, 2, 2, 4, 6}, {3, 3, 3, 5, 5}, 0, 0);
   r = pack_frame_limited(CHIP_WS2915, full, 1, chan, out);

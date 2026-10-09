@@ -1,11 +1,13 @@
-# dig2analog-5ch-8b (WS2805, 8-bit) as two CCT lights + one single-colour light.
+# QuinLED dig2analog-5ch-8b (WS2805, 8-bit) as two CCT lights + one single-colour light.
+# Also fits the QuinLED dig2analog+ (https://quinled.info/quinled-dig2analog-plus/):
+# same WS2805 chip and channel ratings.
 #   CH1/CH2 = CCT A (warm/cold), CH3/CH4 = CCT B (warm/cold), CH5 = single white
 #   (warm on the lower channel, as CH4 = WW / CH5 = CW in the RGBCCT examples)
 # Shows cwww with constant_brightness and three boards on one line.
 
 substitutions:
   name: d2a-5ch-8b-cct
-  friendly_name: dig2analog 5ch 8b CCT
+  friendly_name: QuinLED dig2analog-5ch 8b CCT
   data_pin: GPIO16
   boards: "3"
 
@@ -44,7 +46,7 @@ ws2915:
   refresh_interval: 1s
   power_limit:
     channel_current: 2A           # what each strip draws at 100 % (example value)
-    max_channel_current:          # dig2analog-5ch ratings: CH1-CH3 3 A, CH4-CH5 5 A
+    max_channel_current:          # QuinLED board ratings: CH1-CH3 3 A, CH4-CH5 5 A
       default: 3A
       ch4: 5A
       ch5: 5A

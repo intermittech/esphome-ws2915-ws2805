@@ -1,10 +1,12 @@
-# dig2analog-5ch-8b (WS2805, 8-bit) as one RGBCCT light.
+# QuinLED dig2analog-5ch-8b (WS2805, 8-bit) as one RGBCCT light.
+# Also fits the QuinLED dig2analog+ (https://quinled.info/quinled-dig2analog-plus/):
+# same WS2805 chip and channel ratings.
 #   CH1 R, CH2 G, CH3 B, CH4 (W1) warm white, CH5 (W2) cold white (WLED order: RGB + WW + CW)
 # Same as the 16b example; the WS2805 has no gain header.
 
 substitutions:
   name: d2a-5ch-8b
-  friendly_name: dig2analog 5ch 8b
+  friendly_name: QuinLED dig2analog-5ch 8b
   data_pin: GPIO16
   boards: "1"
 
@@ -51,7 +53,7 @@ ws2915:
       blue: 2A
       white1: 4A                  # CH4, warm white
       white2: 4A                  # CH5, cold white
-    max_channel_current:          # dig2analog-5ch ratings: CH1-CH3 3 A, CH4-CH5 5 A
+    max_channel_current:          # QuinLED board ratings: CH1-CH3 3 A, CH4-CH5 5 A
       default: 3A
       ch4: 5A
       ch5: 5A

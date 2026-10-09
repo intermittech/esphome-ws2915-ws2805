@@ -1,9 +1,9 @@
-# dig2analog-5ch-16b (WS2915, 16-bit) as five independent single-colour lights (CH1..CH5).
+# QuinLED dig2analog-5ch-16b (WS2915, 16-bit) as five independent single-colour lights (CH1..CH5).
 # ESP32 classic, ESP-IDF.
 
 substitutions:
   name: d2a-5ch-16b-white
-  friendly_name: dig2analog 5ch 16b white
+  friendly_name: QuinLED dig2analog-5ch 16b white
   data_pin: GPIO16
   boards: "1"
 
@@ -44,7 +44,7 @@ ws2915:
   transition_refresh_rate: 200Hz
   power_limit:
     channel_current: 2.5A         # what each white strip draws at 100 % (example value)
-    max_channel_current:          # dig2analog-5ch ratings: CH1-CH3 3 A, CH4-CH5 5 A
+    max_channel_current:          # QuinLED board ratings: CH1-CH3 3 A, CH4-CH5 5 A
       default: 3A
       ch4: 5A
       ch5: 5A

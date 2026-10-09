@@ -1,4 +1,4 @@
-# Bench firmware for the first dig2analog-5ch-16b boards: raw 16-bit levels, gain and header
+# Bench firmware for the first QuinLED dig2analog-5ch-16b boards: raw 16-bit levels, gain and header
 # format adjustable from Home Assistant / the web server, no light in between.
 # Use it to verify the open WS2915 points (README "Bench plan"):
 #   - header format: 32-bit (V1.3/V1.5) vs 26-bit (V1.1)
@@ -7,7 +7,7 @@
 
 substitutions:
   name: d2a-5ch-16b-bench
-  friendly_name: dig2analog 5ch 16b bench
+  friendly_name: QuinLED dig2analog-5ch 16b bench
   data_pin: GPIO16
 
 esphome:
