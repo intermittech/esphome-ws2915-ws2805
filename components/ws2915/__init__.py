@@ -101,7 +101,6 @@ def validate_channel(value):
     return CHANNEL_ALIASES[key]
 
 
-power = cv.float_with_unit("power", "(W|w|watt|Watt|watts|Watts)?")
 
 
 CONF_DEFAULT = "default"
@@ -311,23 +310,20 @@ def _validate_transition_rate(value):
 
 
 def _validate_power_limit(value):
+    # All limits are in amps; the earlier watt-based options get a pointer to max_current.
+    for old in (CONF_MAX_POWER, CONF_SUPPLY_VOLTAGE):
+        if isinstance(value, dict) and old in value:
+            raise cv.Invalid(
+                f"power_limit: {old} is not supported, all limits are in amps; set "
+                "max_current to the supply's current instead (e.g. 150 W at 24 V = 6.25A)",
+                [old],
+            )
     value = POWER_LIMIT_SCHEMA(value)
-    caps = (CONF_MAX_CHANNEL_CURRENT, CONF_MAX_CHIP_CURRENT, CONF_MAX_CURRENT, CONF_MAX_POWER)
+    caps = (CONF_MAX_CHANNEL_CURRENT, CONF_MAX_CHIP_CURRENT, CONF_MAX_CURRENT)
     if not any(k in value for k in caps):
         raise cv.Invalid(
             "power_limit needs at least one of max_channel_current, max_chip_current, "
-            "max_current / max_power"
-        )
-    if CONF_MAX_CURRENT in value and CONF_MAX_POWER in value:
-        raise cv.Invalid("power_limit: use max_current or max_power, not both")
-    if CONF_MAX_POWER in value and CONF_SUPPLY_VOLTAGE not in value:
-        raise cv.Invalid(
-            "power_limit: max_power needs supply_voltage", [CONF_SUPPLY_VOLTAGE]
-        )
-    if CONF_MAX_POWER not in value and CONF_SUPPLY_VOLTAGE in value:
-        raise cv.Invalid(
-            "power_limit: supply_voltage is only used with max_power",
-            [CONF_SUPPLY_VOLTAGE],
+            "max_current"
         )
     for key, cap in value.get(CONF_MAX_CHANNEL_CURRENT, {}).items():
         draw = value[CONF_CHANNEL_CURRENT][key]
@@ -355,8 +351,6 @@ POWER_LIMIT_SCHEMA = cv.Schema(
         cv.Optional(CONF_MAX_CHIP_CURRENT): cv.All(cv.current, cv.Range(min=0.01)),
         # Cap for the whole line, e.g. the supply. All chips are dimmed uniformly.
         cv.Optional(CONF_MAX_CURRENT): cv.All(cv.current, cv.Range(min=0.01)),
-        cv.Optional(CONF_MAX_POWER): cv.All(power, cv.Range(min=0.1)),
-        cv.Optional(CONF_SUPPLY_VOLTAGE): cv.All(cv.voltage, cv.Range(min=1.0)),
     }
 )
 
@@ -568,10 +562,6 @@ async def to_code(config: ConfigType) -> None:
             cg.add(var.set_max_chip_current(plim[CONF_MAX_CHIP_CURRENT]))
         if CONF_MAX_CURRENT in plim:
             cg.add(var.set_max_current(plim[CONF_MAX_CURRENT]))
-        elif CONF_MAX_POWER in plim:
-            cg.add(
-                var.set_max_current(plim[CONF_MAX_POWER] / plim[CONF_SUPPLY_VOLTAGE])
-            )
 
     # Lights on this line: after a power-on hold, a fade-in that ran in the dark is replayed
     # with the length the call used. Registered last; their variables exist by now.

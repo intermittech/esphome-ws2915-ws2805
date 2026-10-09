@@ -176,26 +176,24 @@ CASES = [
         None,
     ),
     (
-        "power limit max_power w/o voltage",
-        HUB16 + "  power_limit:\n    channel_current: 3A\n    max_power: 150W\n",
-        False,
-        "needs supply_voltage",
-    ),
-    (
-        "power limit max_power",
+        "power limit line current",
         HUB16
         + "  power_limit:\n    channel_current: {r: 3A, g: 3A, b: 3A, w1: 5A, w2: 5A}\n"
-        "    max_power: 150W\n    supply_voltage: 24V\n",
+        "    max_current: 6.25A\n",
         True,
         None,
     ),
     (
-        "power limit current + power",
-        HUB16
-        + "  power_limit:\n    channel_current: 3A\n    max_current: 6A\n"
-        "    max_power: 150W\n    supply_voltage: 24V\n",
+        "max_power is rejected (amps only)",
+        HUB16 + "  power_limit:\n    channel_current: 3A\n    max_power: 150W\n    supply_voltage: 24V\n",
         False,
-        "not both",
+        "all limits are in amps",
+    ),
+    (
+        "supply_voltage alone is rejected",
+        HUB16 + "  power_limit:\n    channel_current: 3A\n    max_current: 6A\n    supply_voltage: 24V\n",
+        False,
+        "supply_voltage is not supported",
     ),
     ("use_dma on esp32", HUB16 + "  use_dma: true\n", False, None),
     ("power_on_delay alone", HUB16 + "  power_on_delay: 1.5s\n", True, None),

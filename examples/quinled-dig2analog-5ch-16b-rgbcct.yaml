@@ -60,9 +60,8 @@ ws2915:
       ch4: 5A
       ch5: 5A
     max_chip_current: 5A          # per board: ~80 % of F1 (6.3 A); 6 A with a 7.5 A fuse
-    # Whole line (power supply), use instead of / next to max_chip_current:
-    # max_power: 150W
-    # supply_voltage: 24V
+    # Whole line (power supply), next to or instead of max_chip_current:
+    # max_current: 10A
 
 output:
   - platform: ws2915
