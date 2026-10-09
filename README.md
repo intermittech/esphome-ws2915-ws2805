@@ -19,7 +19,9 @@ external_components:
     components: [ws2915]
 ```
 
-## Quick start (RGBCCT on one QuinLED board)
+## Quick start
+
+Two chained QuinLED boards: an RGBCCT light on the first, and two single-colour lights on the second.
 
 ```yaml
 ws2915:
@@ -27,15 +29,19 @@ ws2915:
   chip_type: ws2805            # QuinLED dig2analog+ or QuinLED dig2analog-5ch-8b
   # chip_type: ws2915          # QuinLED dig2analog-5ch-16b, together with:
   # gain: 31
-  pin: GPIO16                  # to the board's Data-In
-  num_chips: 1                 # boards chained on this line
+  pin: GPIO16                  # to the first board's Data-In
+  num_chips: 2                 # boards chained on this line
 
 output:
+  # Board 1 (chip: 0, the default)
   - { platform: ws2915, id: out_red,   channel: 1 }
   - { platform: ws2915, id: out_green, channel: 2 }
   - { platform: ws2915, id: out_blue,  channel: 3 }
   - { platform: ws2915, id: out_warm,  channel: 4 }   # W1 = warm white
   - { platform: ws2915, id: out_cold,  channel: 5 }   # W2 = cold white
+  # Board 2
+  - { platform: ws2915, id: b2_ch1, chip: 1, channel: 1 }
+  - { platform: ws2915, id: b2_ch2, chip: 1, channel: 2 }
 
 light:
   - platform: rgbww
@@ -48,6 +54,12 @@ light:
     warm_white_color_temperature: 2700 K
     cold_white_color_temperature: 6500 K
     color_interlock: true
+  - platform: monochromatic
+    name: Shelf
+    output: b2_ch1
+  - platform: monochromatic
+    name: Cabinet
+    output: b2_ch2
 ```
 
 ## Features
