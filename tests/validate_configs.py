@@ -111,6 +111,19 @@ CASES = [
         "longer than",
     ),
     ("refresh never", HUB16 + "  refresh_interval: never\n", True, None),
+    ("refresh default ws2915 = never", HUB16, True, "refresh_interval: never"),
+    (
+        "refresh default ws2805 = 1s",
+        "ws2915:\n  chip_type: ws2805\n  pin: GPIO16\n  num_chips: 1\n",
+        True,
+        "refresh_interval: 1s",
+    ),
+    (
+        "refresh explicit on ws2805",
+        "ws2915:\n  chip_type: ws2805\n  pin: GPIO16\n  num_chips: 1\n  refresh_interval: never\n",
+        True,
+        "refresh_interval: never",
+    ),
     ("refresh 10ms", HUB16 + "  refresh_interval: 10ms\n", False, None),
     (
         "power limit without cap",

@@ -255,6 +255,12 @@ def _warn_frame_rate(config: ConfigType) -> ConfigType:
 
 def _validate_chip_options(config: ConfigType) -> ConfigType:
     chip = config[CONF_CHIP_TYPE]
+    # Re-latching an unchanged frame every second was checked on the WS2805 (no flicker).
+    # The WS2915 is not checked yet, so it only sends on change unless set explicitly.
+    if CONF_REFRESH_INTERVAL not in config:
+        config[CONF_REFRESH_INTERVAL] = (
+            cv.positive_time_period_milliseconds("1s") if chip == "ws2805" else "never"
+        )
     if chip == "ws2915":
         if CONF_GAIN not in config:
             raise cv.Invalid(
@@ -388,7 +394,8 @@ CONFIG_SCHEMA = cv.All(
             cv.Optional(CONF_RESET_TIME, default="300us"): _validate_reset,
             # Re-send the (unchanged) frame periodically, so a frame corrupted by ESD/EMI
             # does not stay latched until the next change. "never" = only on change.
-            cv.Optional(CONF_REFRESH_INTERVAL, default="never"): cv.Any(
+            # Default per chip, see _validate_chip_options.
+            cv.Optional(CONF_REFRESH_INTERVAL): cv.Any(
                 cv.one_of("never", lower=True),
                 cv.All(
                     cv.positive_time_period_milliseconds,
