@@ -126,33 +126,33 @@ CASES = [
     ),
     ("refresh 10ms", HUB16 + "  refresh_interval: 10ms\n", False, None),
     (
-        "power limit without cap",
+        "power limit without limit",
         HUB16 + "  power_limit:\n    channel_current: 3A\n",
         False,
         "needs at least one of",
     ),
     (
-        "channel caps: default + overrides",
+        "channel limits: default + overrides",
         HUB16
         + "  power_limit:\n    channel_current: {default: 2A, ch4: 4A, ch5: 4A}\n"
         "    max_channel_current: {default: 3A, ch4: 5A, ch5: 5A}\n",
         True,
-        "!capped at",
+        "!limited at",
     ),
     (
-        "channel cap single value",
+        "channel limit single value",
         HUB16 + "  power_limit:\n    channel_current: 2A\n    max_channel_current: 3A\n",
         True,
         None,
     ),
     (
-        "channel cap on some channels only",
+        "channel limit on some channels only",
         HUB16 + "  power_limit:\n    channel_current: 6A\n    max_channel_current: {w1: 5A, w2: 5A}\n",
         True,
-        "CH4 (white1) draws 6.00 A at 100 % but is capped at 5.00 A",
+        "CH4 (white1) draws 6.00 A at 100 % but is limited to 5.00 A",
     ),
     (
-        "channel cap bad channel",
+        "channel limit bad channel",
         HUB16 + "  power_limit:\n    channel_current: 2A\n    max_channel_current: {ch6: 3A}\n",
         False,
         "unknown channel 'ch6'",
@@ -170,7 +170,7 @@ CASES = [
         None,
     ),
     (
-        "power limit chip cap",
+        "power limit chip limit",
         HUB16 + "  power_limit:\n    channel_current: 3A\n    max_chip_current: 5A\n",
         True,
         None,

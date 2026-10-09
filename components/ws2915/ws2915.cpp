@@ -465,7 +465,7 @@ void WS2915Component::dump_config() {
     const float *c = this->power_.channel_current;
     const float *m = this->power_.max_channel_current;
     ESP_LOGCONFIG(TAG,
-                  "  Power limit (CH1..CH5, 0 = no cap):\n"
+                  "  Power limit (CH1..CH5, 0 = no limit):\n"
                   "    current at 100 %%: %.2f/%.2f/%.2f/%.2f/%.2f A\n"
                   "    max per channel:  %.2f/%.2f/%.2f/%.2f/%.2f A\n"
                   "    max per chip: %.2f A, max line: %.2f A",

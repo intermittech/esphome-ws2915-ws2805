@@ -71,8 +71,8 @@ class WS2915Component final : public Component {
   /// Below the main-loop interval, the main loop runs in high-frequency mode during changes.
   void set_transition_refresh_interval(uint32_t us) { this->min_frame_us_ = us; }
   /// Power limiter: LED current per channel at 100 % (same for every chip on the line),
-  /// optional caps per channel (e.g. MOSFET rating), per chip (board fuse) and for the whole
-  /// line (supply). 0 = no cap.
+  /// optional limits per channel (e.g. MOSFET rating), per chip (board fuse) and for the whole
+  /// line (supply). 0 = no limit.
   void set_channel_current(uint8_t channel, float amps) {
     if (channel < CHANNELS_PER_CHIP) {
       this->power_.channel_current[channel] = amps;

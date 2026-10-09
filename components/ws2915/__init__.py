@@ -169,7 +169,7 @@ _CHANNEL_CAP_MAP = _channel_map(_CHANNEL_CAP, "max_channel_current", require_all
 
 
 def validate_max_channel_current(value):
-    """One cap for every channel, or per channel (channels left out are not capped)."""
+    """One limit for every channel, or per channel (channels left out have no limit)."""
     if isinstance(value, dict):
         return _CHANNEL_CAP_MAP(value)
     v = _CHANNEL_CAP(value)
@@ -319,23 +319,23 @@ def _validate_power_limit(value):
                 [old],
             )
     value = POWER_LIMIT_SCHEMA(value)
-    caps = (CONF_MAX_CHANNEL_CURRENT, CONF_MAX_CHIP_CURRENT, CONF_MAX_CURRENT)
-    if not any(k in value for k in caps):
+    limits = (CONF_MAX_CHANNEL_CURRENT, CONF_MAX_CHIP_CURRENT, CONF_MAX_CURRENT)
+    if not any(k in value for k in limits):
         raise cv.Invalid(
             "power_limit needs at least one of max_channel_current, max_chip_current, "
             "max_current"
         )
-    for key, cap in value.get(CONF_MAX_CHANNEL_CURRENT, {}).items():
+    for key, limit in value.get(CONF_MAX_CHANNEL_CURRENT, {}).items():
         draw = value[CONF_CHANNEL_CURRENT][key]
-        if draw > cap:
+        if draw > limit:
             _LOGGER.info(
-                "ws2915: CH%d (%s) draws %.2f A at 100 %% but is capped at %.2f A, "
+                "ws2915: CH%d (%s) draws %.2f A at 100 %% but is limited to %.2f A, "
                 "so it will not exceed %.0f %%",
                 CHANNEL_KEYS.index(key) + 1,
                 key,
                 draw,
-                cap,
-                cap / draw * 100,
+                limit,
+                limit / draw * 100,
             )
     return value
 
@@ -344,12 +344,12 @@ POWER_LIMIT_SCHEMA = cv.Schema(
     {
         # LED current of each channel at 100 % duty, per chip (same for every chip on this line).
         cv.Required(CONF_CHANNEL_CURRENT): validate_channel_current,
-        # Cap per channel, e.g. its MOSFET / terminal rating. Only that channel is held back,
+        # Limit per channel, e.g. its MOSFET / terminal rating. Only that channel is held back,
         # so independent lights on the same chip are not affected.
         cv.Optional(CONF_MAX_CHANNEL_CURRENT): validate_max_channel_current,
-        # Cap per chip / board, e.g. below its fuse. Only the overloaded chip is dimmed.
+        # Limit per chip / board, e.g. below its fuse. Only the overloaded chip is dimmed.
         cv.Optional(CONF_MAX_CHIP_CURRENT): cv.All(cv.current, cv.Range(min=0.01)),
-        # Cap for the whole line, e.g. the supply. All chips are dimmed uniformly.
+        # Limit for the whole line, e.g. the supply. All chips are dimmed uniformly.
         cv.Optional(CONF_MAX_CURRENT): cv.All(cv.current, cv.Range(min=0.01)),
     }
 )
@@ -556,8 +556,8 @@ async def to_code(config: ConfigType) -> None:
         plim = config[CONF_POWER_LIMIT]
         for idx, key in enumerate(CHANNEL_KEYS):
             cg.add(var.set_channel_current(idx, plim[CONF_CHANNEL_CURRENT][key]))
-        for key, cap in plim.get(CONF_MAX_CHANNEL_CURRENT, {}).items():
-            cg.add(var.set_max_channel_current(CHANNEL_KEYS.index(key), cap))
+        for key, limit in plim.get(CONF_MAX_CHANNEL_CURRENT, {}).items():
+            cg.add(var.set_max_channel_current(CHANNEL_KEYS.index(key), limit))
         if CONF_MAX_CHIP_CURRENT in plim:
             cg.add(var.set_max_chip_current(plim[CONF_MAX_CHIP_CURRENT]))
         if CONF_MAX_CURRENT in plim:

@@ -149,13 +149,13 @@ static float packed_current(ChipType chip, const uint8_t *bytes, size_t chips, c
   return total;
 }
 
-static PowerModel model(std::initializer_list<float> cur, std::initializer_list<float> caps, float chip, float line) {
+static PowerModel model(std::initializer_list<float> cur, std::initializer_list<float> limits, float chip, float line) {
   PowerModel pm{};
   int i = 0;
   for (float v : cur)
     pm.channel_current[i++] = v;
   i = 0;
-  for (float v : caps)
+  for (float v : limits)
     pm.max_channel_current[i++] = v;
   pm.max_chip_current = chip;
   pm.max_current = line;
@@ -176,32 +176,32 @@ static void test_power_limit(std::mt19937 &rng) {
   CHECK(std::fabs(r.requested - 19.0f) < 1e-3f && !r.limiting, "no-limit model: %f", r.requested);
   CHECK(out[0] == 0xFF && out[9] == 0xFF, "no-limit frame unchanged");
 
-  // Per-chip cap (board fuse) keeps the colour mix.
+  // Per-chip limit (board fuse) keeps the colour mix.
   const PowerModel fuse = model({3, 3, 3, 5, 5}, {}, 5.0f, 0);
   r = pack_frame_limited(CHIP_WS2915, full, 1, fuse, out);
   const float got = packed_current(CHIP_WS2915, out, 1, fuse.channel_current, nullptr);
-  CHECK(r.limiting && got <= 5.0f + 1e-4f && got > 4.99f, "chip cap: sent %f", got);
+  CHECK(r.limiting && got <= 5.0f + 1e-4f && got > 4.99f, "chip limit: sent %f", got);
   CHECK(std::fabs(r.actual - got) < 1e-3f, "reported actual %f vs packed %f", r.actual, got);
-  CHECK(out[0] == out[2] && out[2] == out[4] && out[6] == out[8], "chip cap keeps ratios");
+  CHECK(out[0] == out[2] && out[2] == out[4] && out[6] == out[8], "chip limit keeps ratios");
 
-  // Per-channel caps (QuinLED dig2analog-5ch: 3 A on CH1-3, 5 A on CH4-5) with a strip that draws
+  // Per-channel limits (QuinLED dig2analog-5ch: 3 A on CH1-3, 5 A on CH4-5) with a strip that draws
   // 4 A on CH1 and 6 A on CH5: only CH1 and CH5 are held back, the others stay at 100 %.
   const PowerModel chan = model({4, 2, 2, 4, 6}, {3, 3, 3, 5, 5}, 0, 0);
   r = pack_frame_limited(CHIP_WS2915, full, 1, chan, out);
-  CHECK(r.limiting, "channel caps should report limiting");
-  CHECK(level_at(CHIP_WS2915, out, 0, 0) == uint32_t(0.75f * 65535), "CH1 capped to 75 %%: %u",
+  CHECK(r.limiting, "channel limits should report limiting");
+  CHECK(level_at(CHIP_WS2915, out, 0, 0) == uint32_t(0.75f * 65535), "CH1 limited to 75 %%: %u",
         level_at(CHIP_WS2915, out, 0, 0));
   CHECK(level_at(CHIP_WS2915, out, 0, 1) == 65535 && level_at(CHIP_WS2915, out, 0, 2) == 65535 &&
             level_at(CHIP_WS2915, out, 0, 3) == 65535,
-        "uncapped channels untouched");
+        "channels without a limit untouched");
   CHECK(4.0f * level_at(CHIP_WS2915, out, 0, 0) / 65535 <= 3.0f && 6.0f * level_at(CHIP_WS2915, out, 0, 4) / 65535 <= 5.0f,
-        "capped channels within their rating");
-  // Below its cap a channel is not touched at all.
+        "limited channels within their rating");
+  // Below its limit a channel is not touched at all.
   const uint16_t half[5] = {32768, 32768, 32768, 32768, 32768};
   r = pack_frame_limited(CHIP_WS2915, half, 1, chan, out);
-  CHECK(!r.limiting && level_at(CHIP_WS2915, out, 0, 0) == 32768, "below channel cap: unchanged");
+  CHECK(!r.limiting && level_at(CHIP_WS2915, out, 0, 0) == 32768, "below channel limit: unchanged");
 
-  // Random chains: every channel <= its cap, every chip <= its cap, line <= line cap.
+  // Random chains: every channel <= its limit, every chip <= its limit, line <= line limit.
   for (int iter = 0; iter < 2000; iter++) {
     const size_t chips = 1 + rng() % 16;
     const ChipType type = (iter & 1) ? CHIP_WS2805 : CHIP_WS2915;
@@ -225,7 +225,7 @@ static void test_power_limit(std::mt19937 &rng) {
         CHECK(sent <= lv[c * 5 + ch], "chip %zu ch %d raised %u > %u", c, ch, sent, lv[c * 5 + ch]);
         if (pm.max_channel_current[ch] > 0) {
           const float i = pm.channel_current[ch] * float(sent) / float(full_scale(type));
-          CHECK(i <= pm.max_channel_current[ch] + 1e-3f, "chip %zu ch %d: %f > cap %f", c, ch, i,
+          CHECK(i <= pm.max_channel_current[ch] + 1e-3f, "chip %zu ch %d: %f > limit %f", c, ch, i,
                 pm.max_channel_current[ch]);
         }
       }
