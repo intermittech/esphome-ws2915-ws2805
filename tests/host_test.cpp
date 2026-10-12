@@ -262,9 +262,46 @@ static void test_config_message() {
   CHECK(all, "chip -1: every slot");
 }
 
+#ifdef WITH_FIRMWARE
+// With the QuinLED dig2analog-ultra-5ch firmware next to this repository (run_host_test.py): ws2915.send_config builds
+// exactly what the board firmware accepts (its config parser: the same command in 3 identical frames).
+extern "C" {
+#include "config.h"   // after ws2915_frame.h: its CONFIG_MAGIC is a macro
+}
+
+static void test_config_frames_firmware() {
+  for (int is16 = 0; is16 < 2; is16++) {
+    const auto chip = is16 ? CHIP_WS2915 : CHIP_WS2805;
+    uint8_t frame[30];
+    std::fill(frame, frame + sizeof frame, 0x11);
+    uint8_t msg[10];
+    build_config_message(chip, CMD_PROTOCOL, 3, msg);
+    apply_config_message(chip, msg, 1, 3, frame);   // chip 1 of 3
+    const size_t bpc = bytes_per_chip(chip);
+    CHECK(frame[0] == 0x11 && frame[2 * bpc] == 0x11, "other chips untouched");
+    settings_t st;
+    config_rx_t rx;
+    settings_default(&st);
+    config_rx_init(&rx);
+    slot_t sl{};
+    sl.raw_len = static_cast<uint8_t>(bpc);
+    std::copy(frame + bpc, frame + 2 * bpc, sl.raw);
+    cfg_result_t res{};
+    for (int i = 0; i < 3; i++)
+      res = config_process(&rx, &st, &sl);
+    CHECK(res.event == CFG_ACK && st.protocol == 3, "%s config frame accepted by the firmware (%d)", is16 ? "WS2915" : "WS2805",
+          static_cast<int>(res.event));
+  }
+  std::printf("  send_config frames (WS2805, WS2915) accepted by the board firmware's config parser\n");
+}
+#endif
+
 int main() {
   test_headers();
   test_config_message();
+#ifdef WITH_FIRMWARE
+  test_config_frames_firmware();
+#endif
   std::mt19937 rng(12345);
   for (int iter = 0; iter < 300; iter++) {
     const int chips = 1 + int(rng() % 12);
