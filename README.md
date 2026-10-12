@@ -10,6 +10,7 @@ Made for the **QuinLED dig2analog** boards, and works with any WS2915/WS2805 har
 |---|---|---|---|
 | [QuinLED dig2analog+](https://quinled.info/quinled-dig2analog-plus/) | WS2805 | `ws2805` | Available now |
 | QuinLED dig2analog-5ch (-8b / -16b) | WS2805 / WS2915 | `ws2805` / `ws2915` | In development; will supersede the QuinLED dig2analog+ |
+| QuinLED dig2analog-ultra-5ch | own MCU | `ws2915` / `ws2805` (emulation), or `dig2analog_ultra` | In development |
 
 ## Install
 
@@ -70,6 +71,16 @@ light:
 - **[Power limiter](https://github.com/intermittech/esphome-ws2915-ws2805/wiki/Power-Limiter):** limits per channel, per board (fuse) and per power supply.
 - **[Power supplies](https://github.com/intermittech/esphome-ws2915-ws2805/wiki/Power-Supply):** switched without blocking, with a power-on delay for boards that need time to start.
 
+## Ultra mode
+
+The QuinLED dig2analog-ultra-5ch can also run as a co-processor: with the `dig2analog_ultra` component, the
+board itself computes transitions, gamma and effects in 16 bit every millisecond, in step on every board,
+and ESPHome only sends what should happen. See **[Ultra mode](https://github.com/intermittech/esphome-ws2915-ws2805/wiki/Ultra-Mode)**
+and [`examples/quinled-dig2analog-ultra-rgbcct.yaml`](examples/quinled-dig2analog-ultra-rgbcct.yaml).
+Up to 50 boards per data pin are officially supported.
+Every PWM frequency (2.2-100 kHz) can be used without a current limit: the board's input capacitor stays within its
+rating for realistic content (table in the wiki; a bench check is pending).
+
 ## Documentation
 
 See the **[wiki](https://github.com/intermittech/esphome-ws2915-ws2805/wiki)**:
@@ -78,6 +89,8 @@ See the **[wiki](https://github.com/intermittech/esphome-ws2915-ws2805/wiki)**:
 |---|---|
 | [QuinLED boards](https://github.com/intermittech/esphome-ws2915-ws2805/wiki/QuinLED-Boards) | Settings and examples for the QuinLED dig2analog+ and QuinLED dig2analog-5ch |
 | [Configuration](https://github.com/intermittech/esphome-ws2915-ws2805/wiki/Configuration) | All options and the lambda API |
+| [Ultra mode](https://github.com/intermittech/esphome-ws2915-ws2805/wiki/Ultra-Mode) | `dig2analog_ultra`: lights, board effects, board settings |
+| [Ultra strip effects](https://github.com/intermittech/esphome-ws2915-ws2805/wiki/Ultra-Strip) | `dig2analog_ultra_strip`: ESPHome's addressable effects across Ultra lights |
 | [Lights and colour](https://github.com/intermittech/esphome-ws2915-ws2805/wiki/Lights-and-Colour) | Interlock, colour temperature, gamma, white order, the WS2805 low end |
 | [Refresh and timing](https://github.com/intermittech/esphome-ws2915-ws2805/wiki/Refresh-and-Timing) | Refresh rates, frame times, bit timing |
 | [Bench plan](https://github.com/intermittech/esphome-ws2915-ws2805/wiki/Bench-Plan) | What still needs checking on hardware |

@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 
 #if defined(__GNUC__)
 #define WS2915_ALWAYS_INLINE inline __attribute__((always_inline))
@@ -39,6 +40,45 @@ inline uint32_t build_header(HeaderFormat fmt, const uint8_t *gain) {
   for (uint8_t i = 0; i < CHANNELS_PER_CHIP; i++)
     g = (g << 5) | (gain[i] & GAIN_MAX);
   return fmt == HEADER_26BIT ? (g << 1) | 1U : g << 7;
+}
+
+// Board config message for MCU boards that emulate WS2805 / WS2915 (QuinLED dig2analog-ultra-5ch): 40 bits
+// MAGIC 0xD2A5 | command | value | CRC-8 (SMBus, poly 0x07) over the first 4 bytes, in the chip's slot; a 10-byte
+// (WS2915) slot carries the bitwise complement in its second half. The board acts on it after 3 identical frames
+// and holds its outputs meanwhile; a normal frame afterwards ends it (and lets the same command trigger again).
+static constexpr uint16_t CONFIG_MAGIC = 0xD2A5;
+static constexpr uint8_t CONFIG_FRAMES = 4;  // copies sent (3 needed)
+
+inline uint8_t crc8_smbus(const uint8_t *d, size_t n) {
+  uint8_t c = 0;
+  while (n--) {
+    c ^= *d++;
+    for (uint8_t b = 0; b < 8; b++)
+      c = static_cast<uint8_t>((c & 0x80U) ? ((c << 1) ^ 0x07U) : (c << 1));
+  }
+  return c;
+}
+
+/// Slot bytes (bytes_per_chip(chip): 5 or 10) of one config message.
+inline void build_config_message(ChipType chip, uint8_t command, uint8_t value, uint8_t *out) {
+  out[0] = static_cast<uint8_t>(CONFIG_MAGIC >> 8);
+  out[1] = static_cast<uint8_t>(CONFIG_MAGIC & 0xFF);
+  out[2] = command;
+  out[3] = value;
+  out[4] = crc8_smbus(out, 4);
+  if (is_16bit(chip)) {
+    for (uint8_t i = 0; i < 5; i++)
+      out[5 + i] = static_cast<uint8_t>(~out[i]);
+  }
+}
+
+/// Puts the message into the slot of `chip` (-1: every chip) of a packed frame.
+inline void apply_config_message(ChipType chip_type, const uint8_t *msg, int chip, uint16_t num_chips, uint8_t *frame) {
+  const size_t bpc = bytes_per_chip(chip_type);
+  for (uint16_t c = 0; c < num_chips; c++) {
+    if (chip < 0 || chip == c)
+      memcpy(frame + c * bpc, msg, bpc);
+  }
 }
 
 template<typename Symbol> struct FrameSymbols {
