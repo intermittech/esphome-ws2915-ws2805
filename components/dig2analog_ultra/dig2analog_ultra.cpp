@@ -88,8 +88,9 @@ void UltraHub::set_pwm_frequency(int board, float hz) {
 
 // A board forwards Ultra frames only once it is locked: a preamble of DARK frames (preamble_frames()) lets the
 // whole chain lock (boards that were locked to a WS protocol show dark meanwhile) before the commands come.
-void UltraHub::resync() {
-  this->preamble_ = preamble_frames(this->num_boards_);
+void UltraHub::resync(bool power_on) {
+  this->preamble_full_ = !(power_on && this->synced_once_);
+  this->preamble_ = this->preamble_full_ ? preamble_frames(this->num_boards_) : power_on_preamble_frames(this->num_boards_);
   int64_t lead_us = static_cast<int64_t>(this->preamble_) * (this->frame_us_ + 200);
   if (this->switch_frame_ < ULTRA_SWITCH_WS_FRAMES)
     lead_us += static_cast<int64_t>(ULTRA_SWITCH_WS_FRAMES - this->switch_frame_) * (this->switch_frame_us_ + 200);
@@ -148,6 +149,15 @@ UltraHub::UpdateResult UltraHub::take_update_result() {
   const UpdateResult r = this->upd_done_;
   this->upd_done_ = UPD_NONE;
   return r;
+}
+
+// The boards have power as far as the hub knows: no supply configured, or it is on and its delay is over.
+bool UltraHub::boards_powered_() const {
+#ifdef USE_POWER_SUPPLY
+  if (this->psu_ != nullptr)
+    return this->psu_->is_enabled() && !this->power_waiting_;
+#endif
+  return true;
 }
 
 bool UltraHub::has_power_supply() const {
@@ -472,7 +482,7 @@ void UltraHub::loop() {
   if (this->power_waiting_ && millis() - this->power_on_ms_ >= this->power_on_delay_ms_) {
     this->power_waiting_ = false;
     ESP_LOGD(TAG, "Power ready: replaying the boards' state");
-    this->resync();
+    this->resync(true);
   }
 #endif
 #ifdef USE_DIG2ANALOG_ULTRA_UPDATE
@@ -527,6 +537,8 @@ void UltraHub::transmit_() {
   } else if (this->preamble_ > 0) {
     this->preamble_--;
     this->sched_.build_dark_frame(start, this->tx_buf_);
+    if (this->preamble_ == 0 && this->preamble_full_ && this->boards_powered_())
+      this->synced_once_ = true;           // every board locked and stored Ultra: power-ons need a short preamble
 #ifdef USE_DIG2ANALOG_ULTRA_UPDATE
   } else if (this->ping_left_ > 0) {
     this->ping_left_--;
@@ -567,12 +579,12 @@ void UltraHub::dump_config() {
                 "  Bit0: %" PRIu32 "/%" PRIu32 " ns, Bit1: %" PRIu32 "/%" PRIu32 " ns, Reset: %" PRIu32 " us\n"
                 "  Frame: %" PRIu32 " us (%" PRIu32 " frames/s max)\n"
                 "  Refresh: every %" PRIu32 " ms, start delay %" PRIu32 " ms, %u copies per command\n"
-                "  Preamble: %u frames of DARK slots",
+                "  Preamble: %u frames of DARK slots (after a supply switch-on: %u)",
                 this->num_boards_, this->pin_, this->inverted_ ? " (inverted)" : "", this->rmt_symbols_,
                 this->use_dma_ ? " (DMA)" : "", this->bit0_high_ns_, this->bit0_low_ns_, this->bit1_high_ns_,
                 this->bit1_low_ns_, this->reset_ns_ / 1000, frame_us, frame_us ? 1000000 / frame_us : 0,
                 this->refresh_interval_ms_, static_cast<uint32_t>(this->start_delay_us_ / 1000), this->repeats_,
-                preamble_frames(this->num_boards_));
+                preamble_frames(this->num_boards_), power_on_preamble_frames(this->num_boards_));
   if (this->num_boards_ > 0 && this->sched_.has_config(0, ULTRA_CFG_BOOT_PROTOCOL)) {
     static const char *const MODES[] = {"auto", "WS2915", "WS2805", "Ultra"};
     const uint16_t m = this->sched_.get_config(0, ULTRA_CFG_BOOT_PROTOCOL);

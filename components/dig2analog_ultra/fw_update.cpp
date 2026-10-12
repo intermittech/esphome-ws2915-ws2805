@@ -29,6 +29,17 @@ static const char *const BLINK_LEGEND =
     "(other hardware / older), slow 1 Hz = waiting in recovery for the next install";
 
 UltraFirmwareUpdate *UltraFirmwareUpdate::active_ = nullptr;
+uint8_t UltraFirmwareUpdate::entities_ = 0;
+
+// The image shared by the lines (fw_image_cache.h): with several update entities it stays this long after its last
+// session, so the lines of an "update all" (queued one after the other) download it once.
+static constexpr uint32_t IMAGE_HOLD_MS = 60000;
+
+static void free_image_buffer(uint8_t *img, size_t size) {
+  RAMAllocator<uint8_t> alloc;
+  alloc.deallocate(img, size);
+}
+static FwImageCache image_cache(free_image_buffer);
 
 // Inputs copied on the main loop (the tasks never read members that the main loop may change), outputs for defer().
 struct UltraFirmwareUpdate::CheckResult {
@@ -54,6 +65,7 @@ struct UltraFirmwareUpdate::DownloadResult {
 
 // ------------------------------------------------------------------------------------------------ setup / config
 void UltraFirmwareUpdate::setup() {
+  entities_++;
   this->pref_ = this->make_entity_preference<uint32_t>();
   if (!this->pref_.load(&this->installed_))
     this->installed_ = 0;
@@ -367,10 +379,17 @@ void UltraFirmwareUpdate::on_downloaded_(DownloadResult *r) {
   this->img_ = r->img;
   this->img_size_ = r->image.size;
   this->job_version_ = r->version;
+  if (!image_cache.put(r->image.sha256, r->img, r->image.size))
+    ESP_LOGD(TAG, "Another image is in use: this one is not shared");
   if (this->dl_abort_.load()) {
     this->finish_("aborted", false);  // came in as the download finished
     return;
   }
+  this->image_ready_();
+}
+
+// A downloaded or shared image that passed the checks: the supply, then the session
+void UltraFirmwareUpdate::image_ready_() {
   this->phase_ = WAIT_POWER;
   this->phase_ms_ = millis();
   this->hub_->hold_power(true);
@@ -405,11 +424,36 @@ void UltraFirmwareUpdate::start_session_() {
 }
 
 void UltraFirmwareUpdate::free_image_() {
-  if (this->img_ != nullptr) {
-    RAMAllocator<uint8_t> alloc;
-    alloc.deallocate(this->img_, this->img_size_);
-    this->img_ = nullptr;
+  if (this->img_ == nullptr)
+    return;
+  if (image_cache.holds(this->img_)) {
+    image_cache.release(millis());   // freed by the cache when no other line wants it
+  } else {
+    free_image_buffer(this->img_, this->img_size_);
   }
+  this->img_ = nullptr;
+}
+
+// QUEUED, our turn: the image another line already downloaded and checked (same SHA-256), or a download
+bool UltraFirmwareUpdate::take_shared_image_() {
+  uint8_t *img = image_cache.acquire(this->image_.sha256, this->image_.size);
+  if (img == nullptr)
+    return false;
+  uint8_t sha[32];
+  const char *err = fw_hex_to_bytes(this->image_.sha256, sha, sizeof(sha))
+                        ? fw_check_image(img, this->image_.size, sha, this->image_, this->latest_, this->hw_rev_)
+                        : "bad SHA-256 in the manifest";
+  this->img_ = img;
+  this->img_size_ = this->image_.size;
+  this->job_version_ = this->latest_;
+  if (err != nullptr) {   // e.g. this line's board revision is not in the image
+    this->finish_(std::string("failed: ") + err, false);
+    return true;
+  }
+  ESP_LOGI(TAG, "'%s': using the image another line downloaded", this->get_name().c_str());
+  this->publish_progress_(DOWNLOAD_SHARE, true);
+  this->image_ready_();
+  return true;
 }
 
 void UltraFirmwareUpdate::finish_(const std::string &status, bool installed) {
@@ -451,11 +495,15 @@ void UltraFirmwareUpdate::abort() {
 
 void UltraFirmwareUpdate::loop() {
   const uint32_t now = millis();
+  image_cache.service(now, entities_ > 1 ? IMAGE_HOLD_MS : 0);
   switch (this->phase_) {
     case QUEUED: {
       if (active_ != nullptr && active_ != this)
         break;
       active_ = this;
+      if (this->take_shared_image_())
+        break;
+      image_cache.trim();
       auto *r = new DownloadResult();
       r->self = this;
       r->image = this->image_;

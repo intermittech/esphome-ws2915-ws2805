@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <memory>
 #include <vector>
 
 #include "ultra_protocol.h"
@@ -152,6 +153,15 @@ inline void pwm_for_frequency(float hz, uint16_t &preset, uint16_t &period) {
 /// board still locked to WS2805 / WS2915 shows its WS window of the zeros (dark, never a colour) until it locks.
 /// A header-only frame would not do: the first board takes the first 256 bits of every frame as its slot.
 inline uint16_t preamble_frames(uint16_t boards) { return static_cast<uint16_t>(ultra_preamble_frames(boards)); }
+/// After the boards' supply switched on, once a full preamble has reached them with power: they all stored Ultra and
+/// confirm it with the first frame, so a short preamble does (a board new since then locks in ~4 frames; 10 cover 2
+/// of them, the refresh brings the rest; research/chain-50-boards.md). 50 boards: 10 frames (0.18 s) instead of 202
+/// (3.6 s).
+static constexpr uint16_t POWER_ON_PREAMBLE_FRAMES = 10;
+inline uint16_t power_on_preamble_frames(uint16_t boards) {
+  const uint16_t full = preamble_frames(boards);
+  return full < POWER_ON_PREAMBLE_FRAMES ? full : POWER_ON_PREAMBLE_FRAMES;
+}
 
 /// Builds the frames: one slot per board, then the header (a trailer: its TIME is the host clock at the frame's
 /// last bit, the moment every board sees the line go quiet). Each board has an urgent queue (commands, each sent
@@ -163,7 +173,8 @@ class Scheduler {
  public:
   void init(uint16_t num_boards, uint32_t seed, uint8_t repeats = 3) {
     this->repeats_ = repeats == 0 ? 1 : repeats;
-    this->boards_.assign(num_boards, Board{});
+    this->boards_.clear();
+    this->boards_.resize(num_boards);
     this->starts_.assign(num_boards, NO_START);
     this->floors_.assign(num_boards, 0);
     for (auto &b : this->boards_) {
@@ -251,7 +262,7 @@ class Scheduler {
     if (!this->valid_(board, light))
       return;
     Board &b = this->boards_[board];
-    Item &it = b.light[light].def;
+    Item &it = li_(b, light).def;
     ultra_slot_light_def(it.slot, light, this->next_seq_(b, light, ULTRA_LIGHT_DEF), roles, gamma_x1000, flags, min_p,
                          max_p);
     it.valid = true;
@@ -264,7 +275,7 @@ class Scheduler {
     if (!this->valid_(board, light))
       return;
     Board &b = this->boards_[board];
-    Item &it = b.light[light].set;
+    Item &it = li_(b, light).set;
     ultra_slot_set(it.slot, light, this->next_seq_(b, light, ULTRA_SET), flags, m, a, bb, dur_ms, 0);
     it.valid = true;
     it.start_us = start_us;
@@ -281,7 +292,7 @@ class Scheduler {
     if (!this->valid_(board, light))
       return;
     Board &b = this->boards_[board];
-    Item &it = b.light[light].set;
+    Item &it = li_(b, light).set;
     ultra_slot_set(it.slot, light, this->next_seq_(b, light, ULTRA_SET), 0, m, a, bb, glide_ms, 0);
     it.valid = true;
     it.start_us = start_us;
@@ -298,7 +309,7 @@ class Scheduler {
     if (!this->valid_(board, light))
       return;
     Board &b = this->boards_[board];
-    Item &it = b.light[light].opt;
+    Item &it = li_(b, light).opt;
     ultra_slot_light_opt_points(it.slot, light, this->next_seq_(b, light, ULTRA_LIGHT_OPT), flags, cw_mired10,
                                 ww_mired10, warm_mired10, red_assist, n, pt_m, pt_mired10);
     it.valid = true;
@@ -313,7 +324,7 @@ class Scheduler {
     if (!this->valid_(board, light))
       return;
     Board &b = this->boards_[board];
-    Item &it = b.light[light].scene;
+    Item &it = li_(b, light).scene;
     ultra_slot_scene(it.slot, light, this->next_seq_(b, light, ULTRA_SCENE), mode, fade_100ms, m, a, bb);
     it.valid = true;
     it.start_us = NO_START;
@@ -327,7 +338,7 @@ class Scheduler {
     if (!this->valid_(board, light))
       return;
     Board &b = this->boards_[board];
-    LightItems &li = b.light[light];
+    LightItems &li = li_(b, light);
     if (li.held) {
       ultra_slot_effect(li.held_effect.slot, light, 0, fx, 0, params, static_cast<uint32_t>(n));
       li.held_effect.valid = true;
@@ -357,10 +368,10 @@ class Scheduler {
   /// A strip shows on the light (dig2analog_ultra_strip layer): its board effect stops at start_us and is kept;
   /// effects set meanwhile are kept too.
   void hold_effect(uint16_t board, uint8_t light, int64_t start_us) {
-    if (!this->valid_(board, light) || this->boards_[board].light[light].held)
+    if (!this->valid_(board, light) || this->effect_held(board, light))
       return;
     Board &b = this->boards_[board];
-    LightItems &li = b.light[light];
+    LightItems &li = li_(b, light);
     li.held_effect = li.effect;
     li.held_steps = li.steps;
     if (!li.effect.valid || li.effect.slot[ULTRA_PAYLOAD] == ULTRA_FX_NONE) {
@@ -373,10 +384,10 @@ class Scheduler {
 
   /// The strip is gone: the kept effect runs again, at its own start (so in phase), with new sequence numbers.
   void release_effect(uint16_t board, uint8_t light) {
-    if (!this->valid_(board, light) || !this->boards_[board].light[light].held)
+    if (!this->effect_held(board, light))
       return;
     Board &b = this->boards_[board];
-    LightItems &li = b.light[light];
+    LightItems &li = *b.light[light];
     li.held = false;
     if (!li.held_effect.valid)
       return;
@@ -395,7 +406,7 @@ class Scheduler {
       this->queue_(b, li.steps[i], key_(light, ULTRA_STEP, static_cast<uint8_t>(i)));
   }
   bool effect_held(uint16_t board, uint8_t light) const {
-    return this->valid_(board, light) && this->boards_[board].light[light].held;
+    return this->valid_(board, light) && this->boards_[board].light[light] && this->boards_[board].light[light]->held;
   }
 
   void identify(uint16_t board, bool on) {
@@ -466,7 +477,9 @@ class Scheduler {
           this->queue_(b, b.config[p], key_(ULTRA_LIGHT_BOARD, ULTRA_CONFIG, p));
       }
       for (uint8_t l = 0; l < ULTRA_LIGHTS; l++) {
-        LightItems &li = b.light[l];
+        if (!b.light[l])
+          continue;
+        LightItems &li = *b.light[l];
         if (li.def.valid)
           this->queue_(b, li.def, key_(l, ULTRA_LIGHT_DEF, 0));
         if (li.opt.valid)
@@ -554,10 +567,12 @@ class Scheduler {
     std::vector<Item> held_steps;
     int64_t last_stream_us{NO_START};  // when its last streamed SET went out
   };
+  /// Per board ~340 B, + ~380 B per light in use (allocated with its first command): 50 boards with one light each
+  /// take ~36 KB of the ESP32's heap (research/chain-50-boards.md). The queue is freed whenever it empties.
   struct Board {
     std::vector<Cmd> queue;
     Item config[CONFIG_PAGES];
-    LightItems light[ULTRA_LIGHTS];
+    std::unique_ptr<LightItems> light[ULTRA_LIGHTS];
     uint16_t cfg[ULTRA_CFG_COUNT]{};
     bool cfg_have[ULTRA_CFG_COUNT]{};
     bool cfg_dirty{false};
@@ -592,6 +607,11 @@ class Scheduler {
     return static_cast<uint16_t>(((light & 0x0F) << 12) | ((type & 0x0F) << 8) | sub);
   }
   bool valid_(uint16_t board, uint8_t light) const { return board < this->boards_.size() && light < ULTRA_LIGHTS; }
+  static LightItems &li_(Board &b, uint8_t light) {
+    if (!b.light[light])
+      b.light[light].reset(new LightItems());
+    return *b.light[light];
+  }
   static uint8_t next_seq_(Board &b, uint8_t light, uint8_t type) {
     return ++b.seq[light < ULTRA_LIGHTS ? light : ULTRA_LIGHTS][type];
   }
@@ -651,7 +671,7 @@ class Scheduler {
     std::memcpy(s, c.item.slot, ULTRA_SLOT_BYTES);
     this->starts_[slot] = recent_start_(c.item, now_us);
     if (c.item.stream) {
-      LightItems &li = b.light[(s[1] >> 4) % ULTRA_LIGHTS];
+      LightItems &li = li_(b, static_cast<uint8_t>((s[1] >> 4) % ULTRA_LIGHTS));
       uint64_t glide = c.item.glide_ms;
       if (c.behind && li.last_stream_us != NO_START) {
         const uint64_t since = static_cast<uint64_t>(now_us - li.last_stream_us) / 1000;
@@ -662,8 +682,11 @@ class Scheduler {
       li.last_stream_us = now_us;
       this->floors_[slot] = 1;
     }
-    if (++c.sends >= c.copies)
+    if (++c.sends >= c.copies) {
       b.queue.erase(b.queue.begin() + static_cast<std::ptrdiff_t>(best));
+      if (b.queue.empty())
+        std::vector<Cmd>().swap(b.queue);   // nothing stays allocated between bursts (boot: every board's items)
+    }
     return true;
   }
 
@@ -679,7 +702,9 @@ class Scheduler {
         it = &b.config[pos];
       } else {
         const uint16_t l = (pos - CONFIG_PAGES) / per_light, k = (pos - CONFIG_PAGES) % per_light;
-        const LightItems &li = b.light[l];
+        if (!b.light[l])
+          continue;
+        const LightItems &li = *b.light[l];
         it = k == 0   ? &li.def
              : k == 1 ? &li.opt
              : k == 2 ? &li.set
@@ -720,7 +745,7 @@ class Scheduler {
   std::vector<Board> boards_;
   std::vector<int64_t> starts_;   // per slot of the frame being built: its absolute start (SET / EFFECT)
   std::vector<uint8_t> floors_;   // per slot: a streamed SET (start not before the frame's TIME)
-  uint32_t t0h_{340}, t0l_{960}, t1h_{700}, t1l_{650};
+  uint32_t t0h_{250}, t0l_{1050}, t1h_{700}, t1l_{650};
   uint8_t repeats_{3};
   uint32_t order_{0};
 };

@@ -77,6 +77,7 @@ The QuinLED dig2analog-ultra-5ch can also run as a co-processor: with the `dig2a
 board itself computes transitions, gamma and effects in 16 bit every millisecond, in step on every board,
 and ESPHome only sends what should happen. See **[Ultra mode](https://github.com/intermittech/esphome-ws2915-ws2805/wiki/Ultra-Mode)**
 and [`examples/quinled-dig2analog-ultra-rgbcct.yaml`](examples/quinled-dig2analog-ultra-rgbcct.yaml).
+Up to 50 boards per data pin are officially supported.
 Every PWM frequency (2.2-100 kHz) can be used without a current limit: the board's input capacitor stays within its
 rating for realistic content (table in the wiki; a bench check is pending).
 

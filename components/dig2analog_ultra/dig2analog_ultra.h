@@ -144,7 +144,9 @@ class UltraHub final : public Component {
     this->cal_boards_ = boards;
   }
   /// Send everything again now (e.g. after replacing a board); running transitions and effects restart.
-  void resync();
+  /// power_on: the boards' supply just switched on: once a full preamble reached them with power, a short one does
+  /// (power_on_preamble_frames()).
+  void resync(bool power_on = false);
   /// Boards forced to WS2805 / WS2915 (boot_protocol ws2805 / ws2915) ignore Ultra frames. This sends their own WS
   /// config frames "protocol = Ultra" in both formats (ultra_protocol.h ultra_switch_frame), then the start-up
   /// preamble and everything again, and stores boot_protocol (0 auto, 3 Ultra) on the boards. Only on request: every
@@ -204,8 +206,8 @@ class UltraHub final : public Component {
   bool use_dma_{false};
   uint16_t num_boards_{1};
   uint32_t rmt_symbols_{64};
-  uint32_t bit0_high_ns_{340};
-  uint32_t bit0_low_ns_{960};
+  uint32_t bit0_high_ns_{250};
+  uint32_t bit0_low_ns_{1050};
   uint32_t bit1_high_ns_{700};
   uint32_t bit1_low_ns_{650};
   uint32_t reset_ns_{300000};
@@ -226,6 +228,9 @@ class UltraHub final : public Component {
   uint32_t last_busy_ms_{0};
   uint32_t frame_us_{0};    // one frame on the wire, worst case
   uint16_t preamble_{0};    // DARK frames still to send before the commands (the boards lock to Ultra)
+  bool preamble_full_{true};   // the preamble running is the full 4N + 2
+  bool synced_once_{false};    // a full preamble reached the boards with their supply on (they all stored Ultra)
+  bool boards_powered_() const;
   uint8_t switch_frame_{ULTRA_SWITCH_WS_FRAMES};  // next WS config frame of switch_boards_to_ultra (none pending)
   uint32_t switch_frame_us_{0};                   // its longest frame on the wire
   bool has_sent_{false};

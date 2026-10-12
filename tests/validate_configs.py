@@ -316,6 +316,23 @@ ULTRA_MONO = """\
 
 CASES += [
     ("ultra minimal hub", ULTRA, True, None),
+    # officially supported: up to 50 boards per data pin (research/chain-50-boards.md); the schema allows 64
+    (
+        "ultra 50 boards, lights on boards 0 and 49",
+        ULTRA.replace("num_boards: 2", "num_boards: 50")
+        + "light:\n"
+        + ULTRA_MONO.format(name="first", board=0, channel=1)
+        + ULTRA_MONO.format(name="last", board=49, channel=5),
+        True,
+        None,
+    ),
+    (
+        "ultra 50 boards, a light on board 50",
+        ULTRA.replace("num_boards: 2", "num_boards: 50") + "light:\n" + ULTRA_MONO.format(name="x", board=50, channel=1),
+        False,
+        "boards are 0-based",
+    ),
+    ("ultra num_boards 65", ULTRA.replace("num_boards: 2", "num_boards: 65"), False, "64"),
     ("ultra rgbww light with board effects", ULTRA + ULTRA_RGBWW, True, None),
     (
         "ultra monochromatic lights on board 1",

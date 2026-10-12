@@ -24,6 +24,7 @@
 #endif
 
 #include "dig2analog_ultra.h"
+#include "fw_image_cache.h"
 #include "fw_manifest.h"
 
 #include <atomic>
@@ -83,6 +84,8 @@ class UltraFirmwareUpdate final : public update::UpdateEntity, public PollingCom
   bool fetch_(const std::string &url, std::vector<uint8_t> &out, size_t max_len);
   void on_checked_(CheckResult *r);
   void on_downloaded_(DownloadResult *r);
+  bool take_shared_image_();
+  void image_ready_();
   void start_install_();
   void start_session_();
   void finish_(const std::string &status, bool installed);
@@ -132,8 +135,10 @@ class UltraFirmwareUpdate final : public update::UpdateEntity, public PollingCom
   uint32_t job_version_{0};  // the version of the image being installed
   std::string status_text_;
 
-  /// one download + session at a time on this ESP32 (each image takes up to 54 KB of heap)
+  /// one download + session at a time on this ESP32 (each image takes up to 54 KB of heap); lines that install the
+  /// same image share one download (fw_image_cache.h)
   static UltraFirmwareUpdate *active_;
+  static uint8_t entities_;
 };
 
 #ifdef USE_SELECT

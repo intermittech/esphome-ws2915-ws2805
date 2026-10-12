@@ -283,8 +283,10 @@ CONFIG_SCHEMA = cv.All(
             cv.GenerateID(): cv.declare_id(UltraHub),
             cv.Required(CONF_PIN): pins.internal_gpio_output_pin_schema,
             cv.Required(CONF_NUM_BOARDS): cv.int_range(min=1, max=64),
-            cv.Optional(CONF_BIT0_HIGH, default="340ns"): cv.positive_time_period_nanoseconds,
-            cv.Optional(CONF_BIT0_LOW, default="960ns"): cv.positive_time_period_nanoseconds,
+            # '0' 250 ns, '1' 700 ns: centred on the boards' 472 ns decision, so the pulse-width change of every
+            # board's forwarding may add up in either direction over 50 boards (research/chain-50-boards.md)
+            cv.Optional(CONF_BIT0_HIGH, default="250ns"): cv.positive_time_period_nanoseconds,
+            cv.Optional(CONF_BIT0_LOW, default="1050ns"): cv.positive_time_period_nanoseconds,
             cv.Optional(CONF_BIT1_HIGH, default="700ns"): cv.positive_time_period_nanoseconds,
             cv.Optional(CONF_BIT1_LOW, default="650ns"): cv.positive_time_period_nanoseconds,
             cv.Optional(CONF_RESET_TIME, default="300us"): _validate_reset,

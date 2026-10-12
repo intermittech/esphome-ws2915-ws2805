@@ -297,7 +297,7 @@ static void test_scheduler() {
     const uint8_t *slot = slot_of(f, 1);
     CHECK(slot[0] == ULTRA_SET, "board 1 gets its SETs");
     order.push_back(static_cast<uint8_t>(slot[1] >> 4));
-    // TIME = the frame's last bit: start + its bits on the wire (default timing 340/960, 700/650 ns)
+    // TIME = the frame's last bit: start + its bits on the wire (default timing 250/1050, 700/650 ns)
     uint32_t hus = 0;
     ultra_parse_header(hdr_of(f), &hus);
     const int64_t wire = static_cast<int64_t>((s.wire_ns(f.data(), f.size()) + 500) / 1000);
@@ -935,6 +935,79 @@ static void test_cal_sequencer() {
         "dark hold covers the whole run (+10 s), at most 255 s");
 }
 
+// 50 boards on one pin (officially supported, research/chain-50-boards.md): frame, timing, preambles, the hub's RAM
+// per board, and a pin calibration of all 50.
+struct SchedPeek : Scheduler {
+  static size_t board_bytes() { return sizeof(Board); }
+  static size_t light_bytes() { return sizeof(LightItems); }
+  size_t lights_allocated() const {
+    size_t n = 0;
+    for (const auto &b : this->boards_) {
+      for (const auto &l : b.light)
+        n += l ? 1 : 0;
+    }
+    return n;
+  }
+  size_t queue_capacity() const {
+    size_t n = 0;
+    for (const auto &b : this->boards_)
+      n += b.queue.capacity();
+    return n;
+  }
+};
+
+static void test_fifty_boards() {
+  const uint16_t N = 50;
+  std::printf("50 boards on one pin\n");
+  SchedPeek s;
+  s.init(N, 4711, 3);
+  std::vector<uint8_t> f(s.frame_bytes());
+  CHECK(s.frame_bytes() == 32u * 50u + 8u, "frame bytes %u", static_cast<unsigned>(s.frame_bytes()));
+  const int64_t t_idle = s.build_idle_frame(0, f.data());
+  CHECK(frame_undefined(f.data(), N) == nullptr, "idle frame defined");
+  CHECK(t_idle > 16500 && t_idle < 17500, "a 50-board frame is %lld us on the wire (12,864 bits)",
+        static_cast<long long>(t_idle));
+  CHECK(preamble_frames(N) == 202 && power_on_preamble_frames(N) == 10 && power_on_preamble_frames(1) == 6 &&
+            power_on_preamble_frames(2) == 10,
+        "preambles: full %u, after a supply switch-on %u", preamble_frames(N), power_on_preamble_frames(N));
+  // RAM: per-light state only for lights in use; the queue is freed once it is empty
+  CHECK(s.lights_allocated() == 0, "no per-light state before the first command");
+  const uint16_t z[5] = {0, 0, 0, 0, 0}, one[5] = {65535, 65535, 65535, 65535, 65535};
+  for (uint16_t b = 0; b < N; b++) {
+    s.light_def(b, 0, MONO1, 1000, 0, z, one);
+    s.light_set(b, 0, 0, 30000, one, one, 1000, 0);
+  }
+  CHECK(s.lights_allocated() == N, "one light per board: %u light states", static_cast<unsigned>(s.lights_allocated()));
+  int frames = 0;
+  for (; s.pending() && frames < 20; frames++)
+    s.build_frame(100000 + frames * 20000, f.data());
+  CHECK(!s.pending() && frames == 6 && s.queue_capacity() == 0, "2 commands x 3 copies in %d frames, queues freed (%u)",
+        frames, static_cast<unsigned>(s.queue_capacity()));
+  std::printf("  frame %lld us (%lld frames/s), preamble 202 frames (~%.1f s), after a supply switch-on 10 (~%.2f s); hub RAM "
+              "per board %u B + %u B per light in use (this host's pointer size)\n",
+              static_cast<long long>(t_idle), 1000000LL / (t_idle + 300), 202 * (t_idle + 500) / 1e6,
+              10 * (t_idle + 500) / 1e6, static_cast<unsigned>(SchedPeek::board_bytes()),
+              static_cast<unsigned>(SchedPeek::light_bytes()));
+  CHECK(SchedPeek::board_bytes() <= 512, "per-board state stays small (%u B)", static_cast<unsigned>(SchedPeek::board_bytes()));
+  // a pin calibration of all 50: dark, one board after the other in chain order, the dark hold covers it
+  {
+    CalRun r = run_cal(N, {}, -1, 0, true);
+    bool order = true, all = true;
+    for (int b = 0; b < N; b++) {
+      const CalTrace &t = r.tr[static_cast<size_t>(b)];
+      all &= t.dark_first >= 0 && t.cal_first >= 0 && t.rel_first >= 0 && t.cal_copies == 3;
+      if (b > 0 && t.cal_first < r.tr[static_cast<size_t>(b - 1)].cal_first + CalSequencer::TEST_MS)
+        order = false;
+    }
+    const double hold_ms = CalSequencer::hold_s(N, 0) * 1000.0;
+    CHECK(all && order, "every board tested once, in chain order, one at a time");
+    CHECK(r.done_ms > 0 && r.done_ms + 10000 <= hold_ms, "done after %.1f s, the dark hold lasts %.0f s", r.done_ms / 1000.0,
+          hold_ms / 1000.0);
+    std::printf("  pin calibration of 50 boards: %.1f s (%.2f s per board), dark hold %.0f s\n", r.done_ms / 1000.0,
+                r.done_ms / 1000.0 / N, hold_ms / 1000.0);
+  }
+}
+
 int main() {
   test_mapping();
   test_scheduler();
@@ -942,6 +1015,7 @@ int main() {
   test_encoder();
   test_switch_frames();
   test_cal_sequencer();
+  test_fifty_boards();
 #ifdef WITH_ENGINE
   test_config_frames();
   test_scene_path();

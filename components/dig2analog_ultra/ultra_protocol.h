@@ -123,6 +123,13 @@ enum {
  * relies on the compatibility rules above (an unknown command does nothing, an unknown effect shows the plain state). */
 #define ULTRA_ID_FW_VERSION       12u
 #define ULTRA_ID_FEATURES         20u
+/* STATUS page DATA (research/return-channel.md 4.5), the fields the firmware measures already (console `status`):
+ * the MCU (die) temperature from the CH32V203's internal sensor, int16 0.1 C, ULTRA_ST_NA = not valid (no good
+ * conversion yet, or 5 bad ones in a row; core/mcutemp.h), and the 3.3 V rail from VREFINT, mV (0 = not known).
+ * The temperature's absolute offset varies per chip (up to ~+-20 C): a trend / over-temperature value. */
+#define ULTRA_ST_MCU_TEMP         9u
+#define ULTRA_ST_VDDA             15u
+#define ULTRA_ST_NA               0x8000u
 #define ULTRA_FEAT_SCENE          0x00000001u  /* SCENE: power-on scene */
 #define ULTRA_FEAT_DIM_TO_WARM    0x00000002u  /* LIGHT_OPT dim to warm with red assist */
 #define ULTRA_FEAT_DTW_POINTS     0x00000004u  /* LIGHT_OPT set points */
@@ -132,7 +139,8 @@ enum {
 #define ULTRA_FEAT_FW_UPDATE      0x00000040u  /* UPD sessions (the app with a bootloader) */
 #define ULTRA_FEAT_BOOT_PROTOCOL  0x00000080u  /* CONFIG 22 */
 #define ULTRA_FEAT_STAGGER_ADAPTIVE 0x00000100u /* CONFIG 7 values 3 / 4 */
-/*      0x00000200-0x00800000     future official features (e.g. broadcast slots, an EXT extension);
+#define ULTRA_FEAT_MCU_TEMP       0x00000200u  /* STATUS: the MCU temperature and the 3.3 V rail (ULTRA_ST_*) */
+/*      0x00000400-0x00800000     future official features (e.g. broadcast slots, an EXT extension);
  *      0x01000000-0x80000000     hardware-specific */
 
 /* SET flags (low nibble of byte 1; the other slot types send FLAGS 0) */
@@ -185,6 +193,8 @@ enum {
                                       (auto / Ultra apply at once; WS2915 / WS2805 from the next power-up on) */
     ULTRA_CFG_COUNT = 23,          /* 23-127: future official ids; a board skips an unknown id (the others apply) */
     ULTRA_CFG_HW = 128,            /* 128-255: hardware-specific (e.g. a Diff-Power receiver, a current-sense revision) */
+    ULTRA_CFG_MCU_TEMP_OFFSET = 128,   /* reserved, not settable yet: MCU temperature offset, int16 0.1 C (a one-point
+                                          calibration, core/mcutemp.h); the board skips it like any unknown id */
 };
 
 /* ----------------------------------------------------------------------------------------------- helpers */
