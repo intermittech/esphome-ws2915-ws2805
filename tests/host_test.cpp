@@ -4,6 +4,7 @@
 
 #include "../components/ws2915/ws2915_frame.h"
 
+#include <algorithm>
 #include <cmath>
 #include <initializer_list>
 #include <cstdio>
@@ -244,8 +245,26 @@ static void test_power_limit(std::mt19937 &rng) {
   }
 }
 
+// Board config frame (send_config): MAGIC D2 A5, command, value, CRC-8/SMBus; WS2915 adds the complement.
+static void test_config_message() {
+  uint8_t m[10];
+  build_config_message(CHIP_WS2805, 0x01, 3, m);
+  CHECK(m[0] == 0xD2 && m[1] == 0xA5 && m[2] == 0x01 && m[3] == 0x03 && m[4] == 0x75, "WS2805 config message");
+  build_config_message(CHIP_WS2915, 0x01, 3, m);
+  CHECK(m[4] == 0x75 && m[5] == 0x2D && m[9] == 0x8A, "WS2915: second half is the complement");
+  uint8_t frame[25];
+  std::fill(frame, frame + 25, 0x42);
+  build_config_message(CHIP_WS2805, 0x09, 0, m);
+  apply_config_message(CHIP_WS2805, m, -1, 5, frame);
+  bool all = true;
+  for (int c = 0; c < 5; c++)
+    all &= frame[c * 5] == 0xD2 && frame[c * 5 + 2] == 0x09;
+  CHECK(all, "chip -1: every slot");
+}
+
 int main() {
   test_headers();
+  test_config_message();
   std::mt19937 rng(12345);
   for (int iter = 0; iter < 300; iter++) {
     const int chips = 1 + int(rng() % 12);

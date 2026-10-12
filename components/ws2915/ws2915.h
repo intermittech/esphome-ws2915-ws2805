@@ -3,6 +3,7 @@
 #ifdef USE_ESP32
 
 #include "esphome/components/output/float_output.h"
+#include "esphome/core/automation.h"
 #include "esphome/core/component.h"
 #include "esphome/core/helpers.h"
 
@@ -115,6 +116,10 @@ class WS2915Component final : public Component {
   void set_raw(uint16_t chip, uint8_t channel, uint16_t value) { this->set_value_(chip, channel, value); }
   /// Re-send the current frame now.
   void refresh() { this->request_frame_(); }
+  /// Board setting for MCU boards that emulate the chips (QuinLED dig2analog-ultra-5ch in WS2805 / WS2915 mode):
+  /// a config frame with `command` and `value` in the slot of `chip` (-1 = every chip on the line), sent 4 times,
+  /// then one normal frame. The board blinks its acknowledge pattern. Commands queue up.
+  void send_config(int chip, uint8_t command, uint8_t value);
   /// Estimated LED current of the whole line after power limiting, in A (needs power_limit).
   float get_current() const { return this->current_; }
   /// Current the lights ask for before limiting, in A (needs power_limit).
@@ -178,6 +183,14 @@ class WS2915Component final : public Component {
 
   uint32_t power_on_delay_ms_{0};
 
+  struct ConfigCmd {
+    int chip;
+    uint8_t command;
+    uint8_t value;
+  };
+  std::vector<ConfigCmd> config_queue_;
+  uint8_t config_sent_{0};  // copies of the first queued command on the line
+
   /// Channels that share a power source. Group 0: no power_supply (powered with the ESP).
   struct PowerGroup {
 #ifdef USE_POWER_SUPPLY
@@ -232,6 +245,18 @@ class WS2915Component final : public Component {
   rmt_encoder_handle_t encoder_{nullptr};
   bool dirty_{true};
   bool range_warned_{false};
+};
+
+/// ws2915.send_config: a board setting as a config frame (see send_config()).
+template<typename... Ts> class SendConfigAction final : public Action<Ts...>, public Parented<WS2915Component> {
+ public:
+  TEMPLATABLE_VALUE(int, chip)
+  TEMPLATABLE_VALUE(uint8_t, command)
+  TEMPLATABLE_VALUE(uint8_t, value)
+
+  void play(const Ts &...x) override {
+    this->parent_->send_config(this->chip_.value(x...), this->command_.value(x...), this->value_.value(x...));
+  }
 };
 
 }  // namespace esphome::ws2915

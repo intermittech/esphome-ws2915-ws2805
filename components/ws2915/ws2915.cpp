@@ -214,6 +214,17 @@ void WS2915Component::replay_light_(LightWatch *w) {
 }
 #endif
 
+// Config frame for MCU boards that emulate the chips: queued, sent CONFIG_FRAMES times, then one normal frame.
+void WS2915Component::send_config(int chip, uint8_t command, uint8_t value) {
+  if (chip >= static_cast<int>(this->num_chips_)) {
+    ESP_LOGW(TAG, "send_config: chip %d out of range (num_chips %u)", chip, this->num_chips_);
+    return;
+  }
+  ESP_LOGD(TAG, "Config frame: command %u, value %u, chip %d", command, value, chip);
+  this->config_queue_.push_back({chip < 0 ? -1 : chip, command, value});
+  this->request_frame_();
+}
+
 // A value changed: send a frame, and keep the main loop fast while changes keep coming.
 void WS2915Component::mark_changed_() {
   if (this->use_high_freq_) {
@@ -396,6 +407,14 @@ void WS2915Component::transmit_() {
   }
   this->params_.header = build_header(this->header_format_, this->gain_);
   this->params_.header_bits = header_bits(this->chip_type_, this->header_format_);
+  // Config frame: the queued command replaces the slot(s), CONFIG_FRAMES times, then one normal frame.
+  const bool config_frame = !this->config_queue_.empty() && this->config_sent_ < CONFIG_FRAMES;
+  if (config_frame) {
+    const ConfigCmd &cmd = this->config_queue_.front();
+    uint8_t msg[10];
+    build_config_message(this->chip_type_, cmd.command, cmd.value, msg);
+    apply_config_message(this->chip_type_, msg, cmd.chip, this->num_chips_, this->tx_buf_);
+  }
 
   rmt_transmit_config_t cfg;
   memset(&cfg, 0, sizeof(cfg));
@@ -409,6 +428,15 @@ void WS2915Component::transmit_() {
   this->last_frame_us_ = micros();
   this->has_sent_ = true;
   this->dirty_ = false;
+  if (config_frame) {
+    this->config_sent_++;
+    this->request_frame_();  // the next copy, or the normal frame that ends the command
+  } else if (!this->config_queue_.empty()) {
+    this->config_queue_.erase(this->config_queue_.begin());  // its closing normal frame went out
+    this->config_sent_ = 0;
+    if (!this->config_queue_.empty())
+      this->request_frame_();
+  }
 }
 
 void WS2915Component::dump_config() {

@@ -8,7 +8,7 @@ with a bit-level simple encoder (ESP-IDF >= 5.3).
 import logging
 import re
 
-from esphome import pins
+from esphome import automation, pins
 import esphome.codegen as cg
 from esphome.components import esp32, esp32_rmt, power_supply
 from esphome.components.esp32 import include_builtin_idf_component
@@ -42,6 +42,7 @@ MULTI_CONF = True
 
 ws2915_ns = cg.esphome_ns.namespace("ws2915")
 WS2915Component = ws2915_ns.class_("WS2915Component", cg.Component)
+SendConfigAction = ws2915_ns.class_("SendConfigAction", automation.Action)
 
 ChipType = ws2915_ns.enum("ChipType")
 CHIP_TYPES = {
@@ -570,3 +571,67 @@ async def to_code(config: ConfigType) -> None:
             light_var = await cg.get_variable(light_id)
             outs = [await cg.get_variable(o) for o in out_ids]
             cg.add(var.add_light(light_var, outs))
+
+
+# ---------------------------------------------------------------------------------------- board config frames
+# Commands of MCU boards that emulate WS2805 / WS2915 (QuinLED dig2analog-ultra-5ch, firmware config.h CMD_*).
+CONF_CHIP = "chip"
+CONF_COMMAND = "command"
+CONF_VALUE = "value"
+CONFIG_COMMANDS = {
+    "protocol": 0x01,  # 0 auto, 1 WS2915, 2 WS2805, 3 Ultra
+    "pwm_preset": 0x02,  # 0..14
+    "dithering": 0x03,  # 0 on, 1 off at low levels, 2 off
+    "dither_threshold": 0x04,  # 1..255 = 0.1..25.5 %
+    "feedback_channel": 0x05,  # 0 red, 1 all, 2 off
+    "stagger": 0x06,  # 0 off, 1 fixed, 2 fixed + spread, 3 adaptive, 4 adaptive + spread
+    "dim_floor": 0x07,  # 0 skip, 1 clamp, 2 off
+    "signal_loss": 0x08,  # 0 hold, 1 off after 2 s, 2 fade off
+    "identify": 0x09,
+    "factory_reset": 0x0A,  # value 165 (0xA5)
+    "smoothing": 0x0B,  # 0 off, 1 WS2805 input, 2 all input
+    "gamma": 0x0C,  # WS2805 input: 0 linear, 1 gamma 2.2, 2 gamma 2.8
+    "min_pulse": 0x0D,  # 5..100 x 10 ns
+    "scene": 0x0E,  # power-on scene: 0 none (dark), 1 store the outputs shown now
+    "scene_fade": 0x0F,  # power-on scene take-over fade, x 100 ms
+    "period_high": 0x10,  # raw PWM period, high byte first
+    "period_low": 0x11,
+    # boards with the input current sense (others answer NACK)
+    "current_limit": 0x12,  # board current limit x 50 mA, 0 = board rating
+    "current_calibrate": 0x13,  # 0 = each channel at 25 / 50 / 75 / 100 %, 5..100 = at value % only
+}
+
+
+def _validate_command(value):
+    """A command name (protocol, pwm_preset, ...) or its number 1-255."""
+    if isinstance(value, int) and not isinstance(value, bool):
+        return cv.int_range(min=1, max=255)(value)
+    key = cv.string_strict(value).lower()
+    if key.isdigit():
+        return cv.int_range(min=1, max=255)(int(key))
+    if key not in CONFIG_COMMANDS:
+        raise cv.Invalid(f"unknown command '{value}' (use {', '.join(CONFIG_COMMANDS)} or a number)")
+    return CONFIG_COMMANDS[key]
+
+
+@automation.register_action(
+    "ws2915.send_config",
+    SendConfigAction,
+    cv.Schema(
+        {
+            cv.GenerateID(): cv.use_id(WS2915Component),
+            # board in the chain (0-based), default: every board on the line
+            cv.Optional(CONF_CHIP, default=-1): cv.templatable(cv.int_range(min=-1, max=4095)),
+            cv.Required(CONF_COMMAND): cv.templatable(_validate_command),
+            cv.Optional(CONF_VALUE, default=0): cv.templatable(cv.int_range(min=0, max=255)),
+        }
+    ),
+    synchronous=True,
+)
+async def send_config_to_code(config, action_id, template_arg, args):
+    var = cg.new_Pvariable(action_id, template_arg)
+    await cg.register_parented(var, config[CONF_ID])
+    cg.add(var.set_chip(await cg.templatable(config[CONF_CHIP], args, cg.int_)))
+    cg.add(var.set_command(await cg.templatable(config[CONF_COMMAND], args, cg.uint8)))
+    cg.add(var.set_value(await cg.templatable(config[CONF_VALUE], args, cg.uint8)))
+    return var

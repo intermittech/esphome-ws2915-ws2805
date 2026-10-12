@@ -1,0 +1,174 @@
+# QuinLED dig2analog-ultra-5ch in Ultra mode: the board runs gamma, transitions and effects itself
+# (16-bit, recomputed every 1 ms), ESPHome only sends what should happen.
+#   Board 0: one RGBCCT light (CH1 R, CH2 G, CH3 B, CH4 warm white, CH5 cold white)
+#   Board 1: a CW/WW light on CH1-CH2 and three single-channel lights on CH3-CH5
+# ESP32 classic, ESP-IDF. Boards in Ultra mode: protocol 3 (or auto: they recognise Ultra frames).
+
+substitutions:
+  name: d2a-ultra
+  friendly_name: QuinLED dig2analog Ultra
+  data_pin: GPIO16   # controller output wired to the first board's Data-In
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+external_components:
+  - source: github://intermittech/esphome-ws2915-ws2805@main
+    components: [dig2analog_ultra]
+    # Developing the component itself? Use the local copy instead:
+    # source:
+    #   type: local
+    #   path: ../components
+
+logger:
+api:
+ota:
+  - platform: esphome
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap: {}
+captive_portal:
+
+dig2analog_ultra:
+  id: ultra
+  pin: ${data_pin}
+  num_boards: 2
+  # Board settings, sent to every board (they are not stored on the boards; change them here or at
+  # runtime with id(ultra).set_pwm_frequency(board, hz) etc.)
+  pwm_frequency: 25kHz          # 2.2 - 100 kHz; presets have the cleanest bit depth (see the wiki)
+  dithering: "on"               # on, off_at_low_levels, off
+  dither_threshold: 1.0%        # for off_at_low_levels
+  dim_floor: skip               # skip, clamp, off: what happens below the shortest clean pulse
+  stagger: adaptive_spread      # off, fixed, fixed_spread, adaptive (least supply ripple), adaptive_spread
+  min_pulse: 200ns
+  signal_loss: hold             # hold (effects keep running), off, fade_off
+  signal_loss_timeout: 3s
+  # boot_protocol: ultra        # stored on the boards (written only when it differs): Ultra right after power-up
+  power_limit:
+    channel_current:            # what your strip draws per channel at 100 % (example values)
+      red: 2A
+      green: 2A
+      blue: 2A
+      white1: 4A
+      white2: 4A
+    max_channel_current: 5A
+    max_board_current: 8A
+
+light:
+  - platform: dig2analog_ultra
+    id: rgbcct
+    name: RGBCCT
+    board: 0
+    red: 1
+    green: 2
+    blue: 3
+    warm_white: 4
+    cold_white: 5
+    cold_white_color_temperature: 6500 K
+    warm_white_color_temperature: 2700 K
+    color_interlock: true
+    gamma_correct: 2.8          # exact power curve on the board, no table steps
+    default_transition_length: 1s
+    restore_mode: RESTORE_DEFAULT_OFF
+    # power_on_scene: true       # the board shows the restored state ~30 ms after power-up, before ESPHome is back
+    # dim_to_warm:               # warmer as it dims (like a filament bulb), computed on the board every 1 ms
+    #   warm_color_temperature: 2000 K
+    #   red_assist: 25%          # red (+ a little green) below the warm white LED's 2700 K
+    effects:                     # run on the board, in step on all boards
+      - ultra_pulse:
+      - ultra_breathe:
+          period: 6s
+          min_brightness: 10%
+      - ultra_flicker:
+      - ultra_candle:
+      - ultra_random:
+          transition_length: 3s
+          update_interval: 5s
+      - ultra_color_loop:
+          period: 60s
+      - ultra_strobe:
+          colors:
+            - red: 100%
+              green: 0%
+              blue: 0%
+              duration: 300ms
+              transition_length: 150ms
+            - red: 0%
+              green: 0%
+              blue: 100%
+              duration: 300ms
+              transition_length: 150ms
+      - ultra_sunrise:
+          duration: 20min
+      - ultra_sunset:
+          duration: 30min
+      - pulse:                   # ESPHome's own effects work too (each step goes to the board as a fade)
+          name: ESPHome Pulse
+
+  - platform: dig2analog_ultra
+    name: Cabinet CCT
+    board: 1
+    cold_white: 1
+    warm_white: 2
+    cold_white_color_temperature: 5000 K
+    warm_white_color_temperature: 2700 K
+    constant_brightness: true
+    effects:
+      - ultra_breathe:
+
+  - platform: dig2analog_ultra
+    name: Shelf 1
+    board: 1
+    channel: 3
+    min_power: 0.2%             # like an output's min_power / max_power / zero_means_zero
+    zero_means_zero: true
+  - platform: dig2analog_ultra
+    name: Shelf 2
+    board: 1
+    channel: 4
+  - platform: dig2analog_ultra
+    name: Shelf 3
+    board: 1
+    channel: 5
+    effects:
+      - ultra_candle:
+          intensity: 30%
+
+button:
+  - platform: template
+    name: Identify board 0
+    entity_category: diagnostic
+    on_press:
+      - lambda: id(ultra).identify(0);
+  - platform: template
+    name: Resync boards
+    entity_category: diagnostic
+    on_press:
+      - lambda: id(ultra).resync();
+  - platform: template
+    name: Calibrate current         # boards with the input current sense: press after installing or changing
+                                    # what is connected. The pin goes dark, its boards are tested one after the
+                                    # other (~1.1 s each), then it fades back; other pins keep running.
+    entity_category: config
+    on_press:
+      - dig2analog_ultra.calibrate_current:
+          id: ultra
+
+select:
+  - platform: template
+    name: PWM frequency
+    entity_category: config
+    options: ["2.197 kHz", "3.107 kHz", "4.395 kHz", "6.215 kHz", "8.789 kHz", "12.43 kHz", "17.58 kHz", "20 kHz",
+              "25 kHz", "30 kHz", "35.16 kHz", "40 kHz", "50 kHz", "70.31 kHz", "100 kHz"]   # the board presets
+    initial_option: "25 kHz"
+    optimistic: true
+    set_action:
+      - lambda: id(ultra).set_pwm_frequency(-1, atof(x.c_str()) * 1000.0f);   // "12.43 kHz" -> that board preset
+    id: pwm_select
