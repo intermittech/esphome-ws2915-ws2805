@@ -1,6 +1,9 @@
-/* QuinLED dig2analog Ultra protocol v2 - shared by the board firmware (C) and the ESPHome component (C++).
- * Keep the copies identical: firmware/src/core/ultra_protocol.h is the master,
- * esphome-ws2915/components/dig2analog_ultra/ultra_protocol.h is a copy (see ULTRA_PROTOCOL.md).
+/* SPDX-License-Identifier: MIT
+ * Copyright (C) 2026 QuinLED
+ *
+ * QuinLED dig2analog Ultra protocol v2 - shared by the board firmware (C) and the controllers (C / C++).
+ * Master: include/ultra_protocol.h in https://github.com/intermittech/quinled-ultra-protocol (spec in its wiki).
+ * Every copy (board firmware, ESPHome component, other controllers) must be byte-identical to one tagged release.
  *
  * Link: WS28xx-style one-wire pulses (same timing as WS2915), MSB first, one way host -> boards.
  * Frame:  N x SLOT (32 bytes, one per board)  +  HEADER (8 bytes, a trailer)  +  reset >= 280 us
@@ -63,12 +66,12 @@ extern "C" {
  * frame a board keeps its lock and clock sync but ignores every slot, an UPD frame it leaves to the update side (no
  * clock sync, no slot), HINT it ignores. RW and UPD are never set together; a board ignores such a frame. The hub sets
  * none of them in normal frames (0x00). */
-#define ULTRA_HDR_RW       0x01u       /* a response window follows this frame; every slot is a POLL (research/return-channel.md) */
+#define ULTRA_HDR_RW       0x01u       /* a response window follows this frame; every slot is a POLL (wiki: Reserved extensions) */
 #define ULTRA_HDR_HINT     0x02u       /* optional: a frame-level hint (none defined yet); a board that doesn't know it
                                           processes the frame as usual */
 #define ULTRA_HDR_EXT      0x04u       /* must understand: the frame uses an extension (none defined yet; it is named
                                           with it, e.g. in a broadcast slot); a board without it ignores every slot */
-#define ULTRA_HDR_UPD      0x08u       /* firmware update session (research/firmware-update.md) */
+#define ULTRA_HDR_UPD      0x08u       /* firmware update session (wiki: Reserved extensions) */
 
 /* slot types */
 enum {
@@ -88,7 +91,7 @@ enum {
                                   namespace: ultra_update.h) */
 };
 
-/* Return channel (reserved, not implemented; research/return-channel.md 4). All times in us after t0 = the last
+/* Return channel (reserved, not implemented; wiki: Reserved extensions). All times in us after t0 = the last
  * falling edge of the RW frame as each board measures it locally (the last edge the tail copy finds in the DIN ring,
  * not the shared clock's phase). During the window the forwarding gate is held CLOSED (DOUT LOW, not high-Z): DIN
  * sees the relayed answers, and a re-armed plan would forward them downstream. No POLL before the chain is locked
@@ -118,12 +121,12 @@ enum {
     ULTRA_PAGE_BUSY = 0xFE, ULTRA_PAGE_UNSUPPORTED = 0xFF,
 };
 /* IDENTITY page DATA: MCU UID (12) | firmware version word (4, ultra_update.h; 0 = unknown) | bootloader version (1,
- * 0 = none) | hardware id (1) | hardware capabilities (2, research/return-channel.md 4.5) | firmware features (4,
+ * 0 = none) | hardware id (1) | hardware capabilities (2, wiki: Reserved extensions) | firmware features (4,
  * ULTRA_FEAT_*). Capability reporting is reserved: without a return channel the host can't know a board's features and
  * relies on the compatibility rules above (an unknown command does nothing, an unknown effect shows the plain state). */
 #define ULTRA_ID_FW_VERSION       12u
 #define ULTRA_ID_FEATURES         20u
-/* STATUS page DATA (research/return-channel.md 4.5), the fields the firmware measures already (console `status`):
+/* STATUS page DATA (wiki: Reserved extensions), the fields the firmware measures already (console `status`):
  * the MCU (die) temperature from the CH32V203's internal sensor, int16 0.1 C, ULTRA_ST_NA = not valid (no good
  * conversion yet, or 5 bad ones in a row; core/mcutemp.h), and the 3.3 V rail from VREFINT, mV (0 = not known).
  * The temperature's absolute offset varies per chip (up to ~+-20 C): a trend / over-temperature value. */
@@ -200,7 +203,7 @@ enum {
 /* ----------------------------------------------------------------------------------------------- helpers */
 /* CRC-8/SMBus (poly 0x07, init 0) and CRC-16/CCITT-FALSE (poly 0x1021, init 0xFFFF), a nibble at a time: 16-entry
  * tables (16 / 32 bytes) instead of 8 shifts per byte, and no 256-entry table (GCC 15 turns the bitwise loop into
- * one: research/flash-size.md) */
+ * one) */
 static inline uint8_t ultra_crc8(const uint8_t *d, uint32_t n)
 {
     static const uint8_t t[16] = { 0x00, 0x07, 0x0E, 0x09, 0x1C, 0x1B, 0x12, 0x15,
