@@ -1,0 +1,119 @@
+# QuinLED Dig2Analog-5ch-16b (WS2915) test: every channel on its own slider in the ESP32's web page.
+# No Home Assistant needed: open http://<the ESP32's IP>/ (or http://d2a-16b-test.local/).
+#   CH1 R, CH2 G, CH3 B, CH4 (W1) warm white, CH5 (W2) cold white
+# ESP32 classic, ESP-IDF.
+
+substitutions:
+  name: d2a-16b-test
+  friendly_name: D2A-5ch-16b test
+  data_pin: GPIO16   # controller output wired to the board's Data-In
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+external_components:
+  - source: github://intermittech/esphome-ws2915-ws2805@main
+    components: [ws2915]
+    refresh: 0s        # always fetch the newest published driver
+    # Developing the component itself? Use the local copy instead:
+    # source:
+    #   type: local
+    #   path: ../components
+
+logger:
+api:
+  reboot_timeout: 0s   # no Home Assistant connected: never reboot for a missing API client
+ota:
+  - platform: esphome
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap: {}               # fallback hotspot if the Wi-Fi is not reachable
+captive_portal:
+
+web_server:
+  port: 80
+  version: 3
+
+ws2915:
+  id: d2a
+  chip_type: ws2915
+  pin: ${data_pin}
+  num_chips: 1
+  gain: 31                        # full gain: the chip's outputs only switch the board's output stage
+  refresh_interval: 1s            # re-send the unchanged frame every second
+  transition_refresh_rate: 200Hz  # while a slider fades
+
+output:
+  - platform: ws2915
+    id: out_ch1
+    channel: 1
+  - platform: ws2915
+    id: out_ch2
+    channel: 2
+  - platform: ws2915
+    id: out_ch3
+    channel: 3
+  - platform: ws2915
+    id: out_ch4
+    channel: 4
+  - platform: ws2915
+    id: out_ch5
+    channel: 5
+
+# One light per channel, so each output can be tested on its own. gamma_correct 1.0: the slider is the
+# output level (50 % = half the 16-bit range). For perceptual dimming use 2.8.
+light:
+  - platform: monochromatic
+    id: light_ch1
+    name: CH1 red
+    output: out_ch1
+    gamma_correct: 1.0
+    default_transition_length: 0.5s
+    restore_mode: ALWAYS_OFF
+  - platform: monochromatic
+    id: light_ch2
+    name: CH2 green
+    output: out_ch2
+    gamma_correct: 1.0
+    default_transition_length: 0.5s
+    restore_mode: ALWAYS_OFF
+  - platform: monochromatic
+    id: light_ch3
+    name: CH3 blue
+    output: out_ch3
+    gamma_correct: 1.0
+    default_transition_length: 0.5s
+    restore_mode: ALWAYS_OFF
+  - platform: monochromatic
+    id: light_ch4
+    name: CH4 warm white
+    output: out_ch4
+    gamma_correct: 1.0
+    default_transition_length: 0.5s
+    restore_mode: ALWAYS_OFF
+  - platform: monochromatic
+    id: light_ch5
+    name: CH5 cold white
+    output: out_ch5
+    gamma_correct: 1.0
+    default_transition_length: 0.5s
+    restore_mode: ALWAYS_OFF
+
+button:
+  - platform: template
+    name: All channels off
+    on_press:
+      - light.turn_off: light_ch1
+      - light.turn_off: light_ch2
+      - light.turn_off: light_ch3
+      - light.turn_off: light_ch4
+      - light.turn_off: light_ch5
+  - platform: restart
+    name: Restart ESP32

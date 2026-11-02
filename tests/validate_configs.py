@@ -1,0 +1,371 @@
+"""Schema tests: run `esphome config` on small configs and check pass/fail and messages.
+
+Usage: .venv/Scripts/python tests/validate_configs.py [name filter ...]
+       (with filters, only the cases whose name contains one of them run)
+
+The Ultra components (ultra_line, dig2analog_plus, ultra_analog_strip) and their cases are in
+https://github.com/intermittech/quinled-ultra-esphome.
+"""
+
+from pathlib import Path
+import subprocess
+import sys
+import textwrap
+
+HERE = Path(__file__).resolve().parent
+ROOT = HERE.parent
+WORK = HERE / "build" / "cfg"
+ESPHOME = [sys.executable, "-m", "esphome"]
+
+BASE = """\
+esphome:
+  name: t
+esp32:
+  board: {board}
+  framework:
+    type: esp-idf
+external_components:
+  - source:
+      type: local
+      path: {components}
+    components: [ws2915]
+"""
+
+HUB16 = """\
+ws2915:
+  id: d2a
+  pin: GPIO16
+  num_chips: 1
+  gain: 31
+"""
+
+PSU = """\
+power_supply:
+  - id: psu
+    pin: GPIO13
+    enable_time: {enable}
+"""
+
+OUT = """\
+output:
+  - platform: ws2915
+    id: o1
+    channel: {channel}
+    chip: {chip}
+"""
+
+# (name, yaml body, expect_ok, substring expected in output or None, board)
+CASES = [
+    ("minimal ws2915", HUB16, True, None),
+    ("ws2915 without gain", "ws2915:\n  pin: GPIO16\n  num_chips: 1\n", False, "gain is required"),
+    (
+        "ws2805 with gain",
+        "ws2915:\n  chip_type: ws2805\n  pin: GPIO16\n  num_chips: 1\n  gain: 31\n",
+        False,
+        "no gain header",
+    ),
+    (
+        "ws2805 with header_format",
+        "ws2915:\n  chip_type: ws2805\n  pin: GPIO16\n  num_chips: 1\n  header_format: 32bit\n",
+        False,
+        "no gain header",
+    ),
+    ("channel 5", HUB16 + OUT.format(channel=5, chip=1), True, None),
+    ("channel ch3", HUB16 + OUT.format(channel="ch3", chip=1), True, None),
+    ("channel w2", HUB16 + OUT.format(channel="w2", chip=1), True, None),
+    ("channel white1", HUB16 + OUT.format(channel="white1", chip=1), True, None),
+    ("channel 0", HUB16 + OUT.format(channel=0, chip=1), False, "must be at least 1"),
+    ("channel 6", HUB16 + OUT.format(channel=6, chip=1), False, "must be at most 5"),
+    ("channel bogus", HUB16 + OUT.format(channel="yellow", chip=1), False, "unknown channel"),
+    ("chip out of range", HUB16 + OUT.format(channel=1, chip=2), False,
+     "chip 2 out of range: 'd2a' has num_chips: 1 (chips count from 1: chip 1 .. 1)"),
+    # chips count from 1, like num_chips (chip 1 = the first board on the line); chip 0 is refused
+    ("chip 0", HUB16 + OUT.format(channel=1, chip=0), False,
+     "chip 0: chips count from 1: the first chip (board) after the controller is chip 1"),
+    ("chip 1 and 2 of 2", HUB16.replace("num_chips: 1", "num_chips: 2") + OUT.format(channel=1, chip=1)
+     + "  - platform: ws2915\n    id: o2\n    channel: 1\n    chip: 2\n", True, None),
+    ("chip left out: chip 1", HUB16 + OUT.format(channel=1, chip=1).replace("    chip: 1\n", ""), True, None),
+    ("chip 1025", HUB16 + OUT.format(channel=1, chip=1025), False, "chip 1025: a line has at most 1024 chips"),
+    ("send_config chip 0",
+     HUB16 + "button:\n  - platform: template\n    name: b\n    on_press:\n"
+     "      - ws2915.send_config:\n          chip: 0\n          command: protocol\n          value: 3\n",
+     False, "chip 0: chips count from 1"),
+    ("send_config chip -1 (the old 'every board')",
+     HUB16 + "button:\n  - platform: template\n    name: b\n    on_press:\n"
+     "      - ws2915.send_config:\n          chip: -1\n          command: protocol\n          value: 3\n",
+     False, "chip -1: chips count from 1"),
+    (
+        "gain map with ch keys",
+        "ws2915:\n  pin: GPIO16\n  num_chips: 1\n  gain: {ch1: 31, ch2: 31, ch3: 31, w1: 20, white2: 0}\n",
+        True,
+        "gain 0 on white2",
+    ),
+    (
+        "gain map missing channel",
+        "ws2915:\n  pin: GPIO16\n  num_chips: 1\n  gain: {red: 31, green: 31, blue: 31, white1: 31}\n",
+        False,
+        "missing channel",
+    ),
+    ("gain 32", HUB16.replace("gain: 31", "gain: 32"), False, "at most 31"),
+    ("reset 250us", HUB16 + "  reset_time: 250us\n", False, "> 280us"),
+    (
+        "ws2915 T1H 550 ns in spec",
+        HUB16 + "  bit1_high: 550ns\n  bit1_low: 750ns\n",
+        True,
+        "!outside",
+    ),
+    (
+        "ws2805 T1H 550 ns out of spec",
+        "ws2915:\n  chip_type: ws2805\n  pin: GPIO16\n  num_chips: 1\n  bit1_high: 550ns\n  bit1_low: 750ns\n",
+        True,
+        "outside the ws2805 datasheet window",
+    ),
+    ("rate 200Hz", HUB16 + "  transition_refresh_rate: 200Hz\n", True, None),
+    ("rate 200fps", HUB16 + "  transition_refresh_rate: 200fps\n", True, None),
+    ("rate 5ms", HUB16 + "  transition_refresh_rate: 5ms\n", True, None),
+    ("rate 2000Hz", HUB16 + "  transition_refresh_rate: 2000Hz\n", False, "1-1000 Hz"),
+    (
+        "rate slower than frame",
+        HUB16.replace("num_chips: 1", "num_chips: 100") + "  transition_refresh_rate: 500Hz\n",
+        True,
+        "longer than",
+    ),
+    ("refresh never", HUB16 + "  refresh_interval: never\n", True, None),
+    ("refresh default ws2915 = never", HUB16, True, "refresh_interval: never"),
+    (
+        "refresh default ws2805 = 1s",
+        "ws2915:\n  chip_type: ws2805\n  pin: GPIO16\n  num_chips: 1\n",
+        True,
+        "refresh_interval: 1s",
+    ),
+    (
+        "refresh explicit on ws2805",
+        "ws2915:\n  chip_type: ws2805\n  pin: GPIO16\n  num_chips: 1\n  refresh_interval: never\n",
+        True,
+        "refresh_interval: never",
+    ),
+    ("refresh 10ms", HUB16 + "  refresh_interval: 10ms\n", False, None),
+    (
+        "power limit without limit",
+        HUB16 + "  power_limit:\n    channel_current: 3A\n",
+        False,
+        "needs at least one of",
+    ),
+    (
+        "channel limits: default + overrides",
+        HUB16
+        + "  power_limit:\n    channel_current: {default: 2A, ch4: 4A, ch5: 4A}\n"
+        "    max_channel_current: {default: 3A, ch4: 5A, ch5: 5A}\n",
+        True,
+        "!limited at",
+    ),
+    (
+        "channel limit single value",
+        HUB16 + "  power_limit:\n    channel_current: 2A\n    max_channel_current: 3A\n",
+        True,
+        None,
+    ),
+    (
+        "channel limit on some channels only",
+        HUB16 + "  power_limit:\n    channel_current: 6A\n    max_channel_current: {w1: 5A, w2: 5A}\n",
+        True,
+        "CH4 (white1) draws 6.00 A at 100 % but is limited to 5.00 A",
+    ),
+    (
+        "channel limit bad channel",
+        HUB16 + "  power_limit:\n    channel_current: 2A\n    max_channel_current: {ch6: 3A}\n",
+        False,
+        "unknown channel 'ch6'",
+    ),
+    (
+        "channel_current partial without default",
+        HUB16 + "  power_limit:\n    channel_current: {red: 3A}\n    max_chip_current: 5A\n",
+        False,
+        "or give a default",
+    ),
+    (
+        "gain map with default",
+        "ws2915:\n  pin: GPIO16\n  num_chips: 1\n  gain: {default: 31, w2: 20}\n",
+        True,
+        None,
+    ),
+    (
+        "power limit chip limit",
+        HUB16 + "  power_limit:\n    channel_current: 3A\n    max_chip_current: 5A\n",
+        True,
+        None,
+    ),
+    (
+        "power limit line current",
+        HUB16
+        + "  power_limit:\n    channel_current: {r: 3A, g: 3A, b: 3A, w1: 5A, w2: 5A}\n"
+        "    max_current: 6.25A\n",
+        True,
+        None,
+    ),
+    (
+        "max_power is rejected (amps only)",
+        HUB16 + "  power_limit:\n    channel_current: 3A\n    max_power: 150W\n    supply_voltage: 24V\n",
+        False,
+        "all limits are in amps",
+    ),
+    (
+        "supply_voltage alone is rejected",
+        HUB16 + "  power_limit:\n    channel_current: 3A\n    max_current: 6A\n    supply_voltage: 24V\n",
+        False,
+        "supply_voltage is not supported",
+    ),
+    ("use_dma on esp32", HUB16 + "  use_dma: true\n", False, None),
+    ("power_on_delay alone", HUB16 + "  power_on_delay: 1.5s\n", True, None),
+    ("power_on_delay 60s", HUB16 + "  power_on_delay: 60s\n", False, None),
+    (
+        "hub power_supply non-blocking",
+        PSU.format(enable="0ms") + HUB16 + "  power_supply: psu\n  power_on_delay: 1.5s\n",
+        True,
+        "!blocks the main loop",
+    ),
+    (
+        "hub power_supply blocking enable_time",
+        PSU.format(enable="1500ms") + HUB16 + "  power_supply: psu\n",
+        True,
+        "enable_time 1500 ms, which blocks the main loop",
+    ),
+    ("hub power_supply unknown id", HUB16 + "  power_supply: nope\n", False, "nope"),
+    ("power_on_fade is gone", HUB16 + "  power_on_delay: 1.5s\n  power_on_fade: 2s\n", False, "power_on_fade"),
+    (
+        "light on a held line",
+        PSU.format(enable="0ms")
+        + HUB16
+        + "  power_on_delay: 1.5s\n"
+        + OUT.format(channel=1, chip=1)
+        + "    power_supply: psu\n"
+        "light:\n  - platform: monochromatic\n    name: L\n    output: o1\n"
+        "    default_transition_length: 2s\n",
+        True,
+        None,
+    ),
+    (
+        "power_supply on hub (default) and output",
+        PSU.format(enable="0ms")
+        + HUB16
+        + "  power_supply: psu\n"
+        + OUT.format(channel=1, chip=1)
+        + "    power_supply: psu\n",
+        True,
+        None,
+    ),
+    (
+        "power_supply on outputs, delay on hub",
+        PSU.format(enable="0ms")
+        + HUB16
+        + "  power_on_delay: 1.5s\n"
+        + OUT.format(channel=1, chip=1)
+        + "    power_supply: psu\n",
+        True,
+        "!blocks the main loop",
+    ),
+    (
+        "two outputs on two supplies",
+        "power_supply:\n  - id: psu_a\n    pin: GPIO13\n    enable_time: 0ms\n"
+        "  - id: psu_b\n    pin: GPIO14\n    enable_time: 0ms\n"
+        + HUB16.replace("num_chips: 1", "num_chips: 2")
+        + "  power_on_delay: 1.5s\n"
+        "output:\n"
+        "  - {platform: ws2915, id: a1, chip: 1, channel: 1, power_supply: psu_a}\n"
+        "  - {platform: ws2915, id: b1, chip: 2, channel: 1, power_supply: psu_b}\n",
+        True,
+        None,
+    ),
+    (
+        "output supply with blocking enable_time",
+        PSU.format(enable="1500ms")
+        + HUB16
+        + OUT.format(channel=1, chip=1)
+        + "    power_supply: psu\n",
+        True,
+        "enable_time 1500 ms, which blocks the main loop",
+    ),
+    (
+        "ws2915 send_config action",
+        HUB16
+        + "button:\n  - platform: template\n    name: b\n    on_press:\n"
+        "      - ws2915.send_config:\n          command: protocol\n          value: 3\n"
+        "      - ws2915.send_config:\n          id: d2a\n          chip: 1\n          command: 0x0B\n"
+        "          value: !lambda 'return 2;'\n",
+        True,
+        None,
+    ),
+    (
+        "ws2915 send_config unknown command",
+        HUB16 + "button:\n  - platform: template\n    name: b\n    on_press:\n"
+        "      - ws2915.send_config:\n          command: brightness\n          value: 3\n",
+        False,
+        "unknown command 'brightness'",
+    ),
+    (
+        "ws2915 send_config value 256",
+        HUB16 + "button:\n  - platform: template\n    name: b\n    on_press:\n"
+        "      - ws2915.send_config:\n          command: protocol\n          value: 256\n",
+        False,
+        "at most 255",
+    ),
+    (
+        "ws2915 send_config current limit / calibrate",
+        HUB16 + "button:\n  - platform: template\n    name: b\n    on_press:\n"
+        "      - ws2915.send_config:\n          command: current_limit\n          value: 120\n"
+        "      - ws2915.send_config:\n          command: current_calibrate\n          value: 0\n",
+        True,
+        None,
+    ),
+    (
+        "ws2915 send_config scene",
+        HUB16 + "button:\n  - platform: template\n    name: b\n    on_press:\n"
+        "      - ws2915.send_config:\n          command: scene\n          value: 1\n",
+        True,
+        None,
+    ),
+]
+
+
+def run_case(idx, name, body, expect_ok, needle, board="esp32dev"):
+    WORK.mkdir(parents=True, exist_ok=True)
+    path = WORK / f"case{idx:02d}.yaml"
+    path.write_text(
+        BASE.format(board=board, components=(ROOT / "components").as_posix()) + body,
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        ESPHOME + ["config", str(path)], capture_output=True, text=True, encoding="utf-8", errors="replace"
+    )
+    out = proc.stdout + proc.stderr
+    ok = proc.returncode == 0
+    problems = []
+    if ok != expect_ok:
+        problems.append(f"expected {'pass' if expect_ok else 'fail'}, got rc={proc.returncode}")
+    if needle:
+        if needle.startswith("!"):
+            if needle[1:] in out:
+                problems.append(f"unexpected '{needle[1:]}' in output")
+        elif needle not in out:
+            problems.append(f"'{needle}' not in output")
+    status = "ok  " if not problems else "FAIL"
+    print(f"{status} {name}" + ("" if not problems else f": {'; '.join(problems)}"))
+    if problems:
+        print(textwrap.indent(out[-1500:], "     | "))
+    return not problems
+
+
+def main() -> int:
+    filters = [f.lower() for f in sys.argv[1:]]
+    cases = list(enumerate(CASES))
+    cases.append((len(CASES), ("esp32-c2 rejected (no RMT)", HUB16, False, "RMT", "esp32-c2-devkitm-1")))
+    if filters:
+        cases = [(i, c) for i, c in cases if any(f in c[0].lower() for f in filters)]
+    results = [run_case(i, *case) for i, case in cases]
+    failed = results.count(False)
+    print(f"\n{len(results) - failed}/{len(results)} schema cases passed")
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

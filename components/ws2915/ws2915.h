@@ -1,0 +1,270 @@
+#pragma once
+
+#ifdef USE_ESP32
+
+#include "esphome/components/output/float_output.h"
+#include "esphome/core/automation.h"
+#include "esphome/core/component.h"
+#include "esphome/core/helpers.h"
+
+#include "ws2915_frame.h"
+
+#ifdef USE_POWER_SUPPLY
+#include "esphome/components/power_supply/power_supply.h"
+#endif
+#ifdef USE_LIGHT
+#include "esphome/components/light/light_state.h"
+#endif
+
+#include <driver/rmt_encoder.h>
+#include <driver/rmt_tx.h>
+
+#include <vector>
+
+namespace esphome::ws2915 {
+
+/// The lambdas' and actions' chip numbers count from 1, as chip: in YAML; this one is every chip on the line
+static constexpr int ALL_CHIPS = -1;
+
+using EncoderParams = FrameSymbols<rmt_symbol_word_t>;
+
+/// One data line with num_chips WS2915 (16-bit, gain header) or WS2805 (8-bit) chips.
+/// Each chip channel is a FloatOutput; the stock light platforms (rgbww, cwww,
+/// monochromatic, ...) provide gamma, colour temperature, interlock, transitions and effects.
+class WS2915Component final : public Component {
+ public:
+  class Channel final : public output::FloatOutput {
+   public:
+    void set_parent(WS2915Component *parent) { this->parent_ = parent; }
+    void set_chip(uint16_t chip) { this->chip_ = chip; }
+    void set_channel(uint8_t channel) { this->channel_ = channel; }
+    uint16_t get_chip() const { return this->chip_; }
+    uint8_t get_channel() const { return this->channel_; }
+
+   protected:
+    void write_state(float state) override { this->parent_->set_level_(this->chip_, this->channel_, state); }
+
+    WS2915Component *parent_{nullptr};
+    uint16_t chip_{0};
+    uint8_t channel_{0};
+  };
+
+  void setup() override;
+  void loop() override;
+  void dump_config() override;
+  float get_setup_priority() const override { return setup_priority::HARDWARE; }
+
+  // Configuration (codegen)
+  void set_chip_type(ChipType type) { this->chip_type_ = type; }
+  void set_pin(uint8_t pin) { this->pin_ = pin; }
+  void set_inverted(bool inverted) { this->inverted_ = inverted; }
+  void set_num_chips(uint16_t num_chips) { this->num_chips_ = num_chips; }
+  void set_rmt_symbols(uint32_t rmt_symbols) { this->rmt_symbols_ = rmt_symbols; }
+  void set_use_dma(bool use_dma) { this->use_dma_ = use_dma; }
+  void set_timing(uint32_t bit0_high_ns, uint32_t bit0_low_ns, uint32_t bit1_high_ns, uint32_t bit1_low_ns,
+                  uint32_t reset_ns) {
+    this->bit0_high_ns_ = bit0_high_ns;
+    this->bit0_low_ns_ = bit0_low_ns;
+    this->bit1_high_ns_ = bit1_high_ns;
+    this->bit1_low_ns_ = bit1_low_ns;
+    this->reset_ns_ = reset_ns;
+  }
+  /// Re-send the unchanged frame this often while nothing changes (0 = never).
+  void set_refresh_interval(uint32_t ms) { this->refresh_interval_ms_ = ms; }
+  /// Minimum time between frames while values change (0 = one frame per main loop, ~16 ms).
+  /// Below the main-loop interval, the main loop runs in high-frequency mode during changes.
+  void set_transition_refresh_interval(uint32_t us) { this->min_frame_us_ = us; }
+  /// Power limiter: LED current per channel at 100 % (same for every chip on the line),
+  /// optional limits per channel (e.g. terminal rating), per chip (board fuse) and for the whole
+  /// line (supply). 0 = no limit.
+  void set_channel_current(uint8_t channel, float amps) {
+    if (channel < CHANNELS_PER_CHIP) {
+      this->power_.channel_current[channel] = amps;
+      this->has_power_model_ = true;
+    }
+  }
+  void set_max_channel_current(uint8_t channel, float amps) {
+    if (channel < CHANNELS_PER_CHIP)
+      this->power_.max_channel_current[channel] = amps;
+  }
+  void set_max_chip_current(float amps) { this->power_.max_chip_current = amps; }
+  void set_max_current(float amps) { this->power_.max_current = amps; }
+  /// Time the boards need after power-on before they take data. After boot, and after a
+  /// power supply really switches on, the channels it powers are sent as 0 for this long
+  /// (non-blocking; the rest of the line keeps updating).
+  void set_power_on_delay(uint32_t ms) { this->power_on_delay_ms_ = ms; }
+#ifdef USE_LIGHT
+  /// A light that uses `outputs` of this line. When its supply comes out of a power-on hold,
+  /// a fade-in that already finished in the dark is replayed from off with the same length
+  /// (default_transition_length or whatever the call asked for).
+  void add_light(light::LightState *light, const std::vector<Channel *> &outputs);
+#endif
+#ifdef USE_POWER_SUPPLY
+  /// Channel (chip, channel) is powered by `psu` (power_supply: on its output). The driver
+  /// requests the supply while any of its channels is above 0, instead of the output doing
+  /// it with ESPHome's blocking enable_time. keep_on_time_ms is the supply's keep_on_time.
+  void add_channel_power_supply(uint16_t chip, uint8_t channel, power_supply::PowerSupply *psu,
+                                uint32_t keep_on_time_ms);
+  /// Supply for every channel of this line without a power_supply of its own.
+  void set_default_power_supply(power_supply::PowerSupply *psu, uint32_t keep_on_time_ms);
+#endif
+
+  // Runtime API (lambdas / tests). Gain and header format are chain-wide.
+  void set_gain(uint8_t channel, uint8_t gain);
+  uint8_t get_gain(uint8_t channel) const { return channel < CHANNELS_PER_CHIP ? this->gain_[channel] : 0; }
+  void set_header_format(HeaderFormat format);
+  HeaderFormat get_header_format() const { return this->header_format_; }
+  /// Write a raw level (0..65535 on WS2915, 0..255 on WS2805) to channel 0..4 (R, G, B, W1, W2) of chip (1 = the
+  /// first chip on the line, as chip: in YAML), bypassing the light. The next light update of that channel overwrites it.
+  void set_raw(int chip, uint8_t channel, uint16_t value);
+  /// Re-send the current frame now.
+  void refresh() { this->request_frame_(); }
+  /// Board setting for MCU boards that emulate the chips (QuinLED Dig2Analog-Plus-5ch in WS2805 / WS2915 mode):
+  /// a config frame with `command` and `value` in the slot of `chip` (1 = the first, as chip: in YAML; ALL_CHIPS = -1:
+  /// every chip on the line; 0 or a chip beyond num_chips sends nothing, logged), sent 4 times,
+  /// then one normal frame. The board blinks its acknowledge pattern. Commands queue up.
+  void send_config(int chip, uint8_t command, uint8_t value);
+  /// Estimated LED current of the whole line after power limiting, in A (needs power_limit).
+  float get_current() const { return this->current_; }
+  /// Current the lights ask for before limiting, in A (needs power_limit).
+  float get_requested_current() const { return this->requested_current_; }
+  bool is_limiting() const { return this->limiting_; }
+  /// False while any channel is held at 0 for power_on_delay.
+  bool is_power_ready() const {
+    for (const auto &g : this->groups_) {
+      if (g.waiting)
+        return false;
+    }
+    return true;
+  }
+  uint16_t get_num_chips() const { return this->num_chips_; }
+
+ protected:
+  bool is_16bit_() const { return is_16bit(this->chip_type_); }
+  size_t num_levels_() const { return static_cast<size_t>(this->num_chips_) * CHANNELS_PER_CHIP; }
+  size_t get_buffer_size_() const { return static_cast<size_t>(this->num_chips_) * bytes_per_chip(this->chip_type_); }
+
+  void set_level_(uint16_t chip, uint8_t channel, float state);
+  void set_value_(uint16_t chip, uint8_t channel, uint16_t value);
+  void mark_changed_();
+  void request_frame_();
+  void transmit_();
+  void update_group_(uint8_t group);
+  void start_group_wait_(uint8_t group, uint32_t ms);
+  uint8_t group_at_(size_t index) const { return this->group_of_ != nullptr ? this->group_of_[index] : 0; }
+#ifdef USE_POWER_SUPPLY
+  uint8_t group_for_(power_supply::PowerSupply *psu, uint32_t keep_on_time_ms);
+#endif
+
+  ChipType chip_type_{CHIP_WS2915};
+  HeaderFormat header_format_{HEADER_32BIT};
+  uint8_t pin_{0};
+  bool inverted_{false};
+  bool use_dma_{false};
+  uint16_t num_chips_{1};
+  uint32_t rmt_symbols_{64};
+  uint32_t bit0_high_ns_{340};
+  uint32_t bit0_low_ns_{960};
+  uint32_t bit1_high_ns_{700};
+  uint32_t bit1_low_ns_{650};
+  uint32_t reset_ns_{300000};
+  uint8_t gain_[CHANNELS_PER_CHIP]{};
+
+  uint32_t refresh_interval_ms_{0};
+  uint32_t min_frame_us_{0};
+  bool use_high_freq_{false};
+  bool high_freq_active_{false};
+  HighFrequencyLoopRequester high_freq_;
+  uint32_t last_change_ms_{0};
+  uint32_t last_frame_us_{0};
+  bool has_sent_{false};
+
+  bool has_power_model_{false};
+  PowerModel power_{};
+  float current_{0.0f};
+  float requested_current_{0.0f};
+  bool limiting_{false};
+
+  uint32_t power_on_delay_ms_{0};
+
+  struct ConfigCmd {
+    int chip;
+    uint8_t command;
+    uint8_t value;
+  };
+  std::vector<ConfigCmd> config_queue_;
+  uint8_t config_sent_{0};  // copies of the first queued command on the line
+
+  /// Channels that share a power source. Group 0: no power_supply (powered with the ESP).
+  struct PowerGroup {
+#ifdef USE_POWER_SUPPLY
+    power_supply::PowerSupply *psu{nullptr};
+    power_supply::PowerSupplyRequester req;
+    uint32_t keep_on_ms{0};
+    bool requested{false};
+    bool released{false};
+    uint32_t released_ms{0};
+#endif
+    uint32_t active{0};   // its channels above 0
+    bool waiting{false};  // powering up: its channels are sent as 0
+  };
+#ifdef USE_LIGHT
+  /// Measures each call's transition: a call publishes remote values, and the target is
+  /// reached when its transition ends; the difference is the length that was used.
+  class LightWatch final : public light::LightRemoteValuesListener, public light::LightTargetStateReachedListener {
+   public:
+    void on_light_remote_values_update() override {
+      this->call_ms = millis();
+      this->reached = false;
+    }
+    void on_light_target_state_reached() override {
+      this->length_ms = millis() - this->call_ms;
+      this->reached = true;
+    }
+    light::LightState *light{nullptr};
+    std::vector<Channel *> outputs;
+    uint32_t groups{0};  // bit mask of the power groups of its outputs
+    uint32_t call_ms{0};
+    uint32_t length_ms{0};
+    bool reached{false};
+  };
+  void replay_light_(LightWatch *watch);
+  std::vector<LightWatch *> lights_;
+#endif
+  struct ChannelSupply {
+    uint16_t chip;
+    uint8_t channel;
+    uint8_t group;
+  };
+  std::vector<PowerGroup> groups_ = std::vector<PowerGroup>(1);
+  std::vector<ChannelSupply> channel_supplies_;  // from codegen, applied in setup()
+  uint8_t default_group_{0};
+  uint8_t *group_of_{nullptr};     // group per level (only with more than one group)
+  uint16_t *out_levels_{nullptr};  // levels with held groups at 0 (only with power_on_delay)
+
+  uint16_t *levels_{nullptr};  // targets, chip-major, before power limiting
+  uint8_t *tx_buf_{nullptr};   // wire bytes of the frame on the line
+  EncoderParams params_{};
+  rmt_channel_handle_t channel_{nullptr};
+  rmt_encoder_handle_t encoder_{nullptr};
+  bool dirty_{true};
+  bool range_warned_{false};
+};
+
+/// ws2915.send_config: a board setting as a config frame (see send_config()).
+template<typename... Ts> class SendConfigAction final : public Action<Ts...>, public Parented<WS2915Component> {
+ public:
+  TEMPLATABLE_VALUE(int, chip)
+  TEMPLATABLE_VALUE(uint8_t, command)
+  TEMPLATABLE_VALUE(uint8_t, value)
+
+  /// chip: 1 = the first (as in YAML); left out: every chip on the line
+  void play(const Ts &...x) override {
+    this->parent_->send_config(this->chip_.has_value() ? this->chip_.value(x...) : ALL_CHIPS, this->command_.value(x...),
+                               this->value_.value(x...));
+  }
+};
+
+}  // namespace esphome::ws2915
+
+#endif  // USE_ESP32
